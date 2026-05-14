@@ -15,6 +15,8 @@ The mental model behind Kura: the core enforcement library and the thin adapters
   {{< card link="policy" title="Cedar policy" subtitle="The v1 deploy-time policy-apply posture." >}}
   {{< card link="iac" title="Infrastructure as code" subtitle="The Terraform-for-IaC decision for the Standard-Regulated baseline." >}}
   {{< card link="storage" title="Object storage" subtitle="The two buckets outside Postgres — distinct credentials, retention as policy, the deny-delete posture." >}}
+  {{< card link="llm-gateway" title="LLM access gateway" subtitle="The thin gateway for LLM calls — DPA gate at startup, metadata-only logging, hashes never contents." >}}
+  {{< card link="gate" title="The enforcement gate" subtitle="The single core entrypoint — authn → authz → access → mask → audit, welded shut by construction." >}}
 {{< /cards >}}
 
 Other concept pages are filled in as the core enforcement library lands.
