@@ -7,12 +7,35 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/identity"
 )
+
+// testConfig returns a complete, wired Config for the given bind address,
+// backed by in-memory fakes. It also returns the Authenticator so a test
+// can mint tokens the server will accept.
+func testConfig(addr string) (Config, *identity.Authenticator) {
+	auth := identity.NewAuthenticator([]byte("test-signing-secret"))
+	return Config{
+		Addr:     addr,
+		Logger:   discardLogger(),
+		Auth:     auth,
+		Recorder: audit.NewRecorder(audit.NewMemStore()),
+		Google:   &fakeGoogle{consentURL: "https://accounts.google.example/auth"},
+		Trust:    testTrust(),
+		TokenTTL: time.Hour,
+	}, auth
+}
 
 // kura serve must start, bind a real socket, serve its health endpoints,
 // and shut down gracefully when its context is cancelled.
 func TestServerServesHealthAndShutsDownGracefully(t *testing.T) {
-	srv := New(Config{Addr: "127.0.0.1:0"})
+	cfg, _ := testConfig("127.0.0.1:0")
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errc := make(chan error, 1)
@@ -49,10 +72,24 @@ func TestServerServesHealthAndShutsDownGracefully(t *testing.T) {
 	}
 }
 
+// New requires its enforcement collaborators — a server that cannot
+// resolve a token or record an audit event must not come into existence.
+func TestNewRequiresEnforcementDependencies(t *testing.T) {
+	cfg, _ := testConfig("127.0.0.1:0")
+	cfg.Auth = nil
+	if _, err := New(cfg); err == nil {
+		t.Error("New returned no error when Auth was nil")
+	}
+}
+
 // An unauthenticated request to a data route must be rejected before any
 // business-logic handler runs.
 func TestUnauthenticatedDataRouteRejectedBeforeBusinessLogic(t *testing.T) {
-	srv := New(Config{Addr: "127.0.0.1:0"})
+	cfg, _ := testConfig("127.0.0.1:0")
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	req, _ := http.NewRequest(http.MethodGet, "/api/people/89", nil)
 	rec := newRecorder()
@@ -63,17 +100,30 @@ func TestUnauthenticatedDataRouteRejectedBeforeBusinessLogic(t *testing.T) {
 	}
 }
 
-// A request that does carry a credential is allowed past the auth gate
-// (the skeleton has no data handlers yet, so it 404s rather than 401s).
-func TestCredentialedDataRoutePassesAuthGate(t *testing.T) {
-	srv := New(Config{Addr: "127.0.0.1:0"})
+// A request carrying a valid token is allowed past the auth gate (the
+// skeleton has no data handlers yet, so it 404s rather than 401s).
+func TestValidTokenPassesAuthGate(t *testing.T) {
+	cfg, auth := testConfig("127.0.0.1:0")
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	token, err := auth.Issue(identity.Principal{
+		Type:   identity.PrincipalConsultant,
+		ID:     "alex@examplefirm.com",
+		Email:  "alex@examplefirm.com",
+		Domain: "examplefirm.com",
+	}, time.Hour)
+	if err != nil {
+		t.Fatalf("issuing token: %v", err)
+	}
 
 	req, _ := http.NewRequest(http.MethodGet, "/api/people/89", nil)
-	req.Header.Set("Authorization", "Bearer some-token")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := newRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 
 	if rec.status == http.StatusUnauthorized {
-		t.Errorf("credentialed /api request was rejected by the auth gate (status %d)", rec.status)
+		t.Errorf("request with a valid token was rejected by the auth gate (status %d)", rec.status)
 	}
 }

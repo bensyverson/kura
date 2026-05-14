@@ -35,7 +35,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newServeCmd())
 	cmd.AddCommand(newStubCmd("dashboard", "Run the local web dashboard (loopback-bound HTTP client)"))
 	cmd.AddCommand(newStubCmd("mcp", "Run the MCP server (local stdio proxy by default)"))
-	cmd.AddCommand(newStubCmd("login", "Sign in via OAuth and cache a short-lived token"))
+	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newStubCmd("init", "Materialize a per-client deployment scaffold"))
 	cmd.AddCommand(newStubCmd("user", "Manage users"))
 	cmd.AddCommand(newStubCmd("role", "Manage role assignments"))

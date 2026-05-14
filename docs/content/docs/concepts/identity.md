@@ -92,6 +92,12 @@ entity Service {
 Workspace domain maps to which principal type. An unauthenticated request resolves to
 *no principal* and is denied.
 
+The mapping is `DomainTrust`: the firm domain yields `Consultant`, a client domain
+yields `User` — or `Admin`, if the email is in an explicit per-deployment admin
+allowlist. The allowlist keeps `Admin` a declarative config edit, consistent with the
+rest of the engagement model, rather than a directory-membership lookup. A domain the
+deployment names nowhere yields no principal at all — there is no default type.
+
 ## The token model
 
 The token **is** the identity. A request carries a short-lived token; resolving that
@@ -115,6 +121,9 @@ act on them: *no credential* (unauthenticated), *malformed or unverified* (inval
 token), and *verified but past expiry* (expired token). Only a fully valid token
 yields a principal.
 
-`kura login` performs the OAuth flow and obtains one of these short-lived tokens;
-issuing a token after a verified OAuth sign-in, and the HTTP middleware that resolves
-the token on every request, land in the Phase 2 server-auth task.
+`kura login` performs the OAuth flow and obtains one of these short-lived tokens. The
+flow is a **loopback handoff**: `kura serve` brokers the Google sign-in and mints the
+token, then redirects it back to a temporary `127.0.0.1` listener the CLI stood up.
+The full sequence — and why loopback was chosen over the OAuth device flow — is in
+[The HTTP API server](../server/). The HTTP middleware that resolves the token to a
+principal on every request lives there too.
