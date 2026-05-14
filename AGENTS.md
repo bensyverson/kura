@@ -14,7 +14,7 @@ When you need additional context, consult the docs:
 
 ## Architecture: adapter-over-core
 
-The product is `internal/` — the core enforcement library (Cedar authorization, audit logging, PII detection/masking, field-level encryption, data access). The CLI (`cmd/kura/`), the HTTP API, the local dashboard, and the MCP server are all thin adapters over it.
+The product is `internal/` — the core enforcement library (Cedar authorization, audit logging, PII detection/masking, field-level encryption, data access). The CLI, the HTTP API, the local dashboard, and the MCP server are all thin adapters over it.
 
 - Logic belongs in `internal/`. An adapter file that holds a policy decision, an audit write, or a masking rule is a bug — adapters are wiring plus presentation only.
 

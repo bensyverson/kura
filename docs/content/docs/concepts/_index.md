@@ -17,6 +17,7 @@ The mental model behind Kura: the core enforcement library and the thin adapters
   {{< card link="storage" title="Object storage" subtitle="The two buckets outside Postgres — distinct credentials, retention as policy, the deny-delete posture." >}}
   {{< card link="llm-gateway" title="LLM access gateway" subtitle="The thin gateway for LLM calls — DPA gate at startup, metadata-only logging, hashes never contents." >}}
   {{< card link="gate" title="The enforcement gate" subtitle="The single core entrypoint — authn → authz → access → mask → audit, welded shut by construction." >}}
+  {{< card link="server" title="The HTTP API server" subtitle="`kura serve` — the only public surface, a JSON API over the core gate." >}}
 {{< /cards >}}
 
 Other concept pages are filled in as the core enforcement library lands.

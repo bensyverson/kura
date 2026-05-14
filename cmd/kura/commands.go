@@ -32,7 +32,7 @@ func newRootCmd() *cobra.Command {
 	// The product surfaces (build plan phases 2, 4, 5, 7) and the core CLI
 	// verbs (phase 3). All stubs for now; each phase replaces its own.
 	cmd.AddCommand(newStubCmd("status", "Session opener: identity check and landscape briefing"))
-	cmd.AddCommand(newStubCmd("serve", "Run the remote HTTP API server (the only public surface)"))
+	cmd.AddCommand(newServeCmd())
 	cmd.AddCommand(newStubCmd("dashboard", "Run the local web dashboard (loopback-bound HTTP client)"))
 	cmd.AddCommand(newStubCmd("mcp", "Run the MCP server (local stdio proxy by default)"))
 	cmd.AddCommand(newStubCmd("login", "Sign in via OAuth and cache a short-lived token"))

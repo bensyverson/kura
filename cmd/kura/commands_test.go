@@ -34,7 +34,7 @@ func TestStubVerbReportsNotImplemented(t *testing.T) {
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"serve"})
+	cmd.SetArgs([]string{"dashboard"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected stub verb to return an error, got nil")
