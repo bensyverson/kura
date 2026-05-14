@@ -7,11 +7,11 @@ import (
 	"fmt"
 )
 
-// ErrMissingDependency is returned by NewPostgresStore when a required
-// collaborator is missing. A store that cannot read safely — no pool, no
-// tenant to scope RLS to, or no key to decrypt with — must not come into
+// ErrMissingDependency is returned by a Postgres store constructor when
+// a required collaborator is missing. A store that cannot read or write
+// safely — no pool, or no tenant to scope RLS to — must not come into
 // existence.
-var ErrMissingDependency = errors.New("data: postgres store requires a database pool, a tenant id, and an encryption key")
+var ErrMissingDependency = errors.New("data: postgres store is missing a required dependency")
 
 // PostgresStore is the production RecordStore: it assembles records from
 // the kura.records / kura.record_field_values EAV tables. It is
@@ -154,25 +154,32 @@ func (s *PostgresStore) fieldsOf(ctx context.Context, tx *sql.Tx, recordID strin
 	return fields, nil
 }
 
-// inTenantTx runs fn inside a read-only transaction with the
-// kura.tenant_id GUC set to the store's tenant. set_config's third
-// argument is true — the setting is transaction-local — so it cannot
-// leak onto another pooled connection's later use. RLS keys on this
-// GUC, so without it a connection sees nothing; with it, exactly one
-// tenant's rows.
+// inTenantTx runs fn inside a read-only transaction scoped to the
+// store's tenant.
 func (s *PostgresStore) inTenantTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	return withTenantTx(ctx, s.db, s.tenantID, true, fn)
+}
+
+// withTenantTx runs fn inside a transaction with the kura.tenant_id GUC
+// set to tenantID. set_config's third argument is true — the setting is
+// transaction-local — so it cannot leak onto another pooled
+// connection's later use. RLS keys on this GUC, so without it a
+// connection sees nothing; with it, exactly one tenant's rows. readOnly
+// chooses the transaction mode: reads use a read-only transaction,
+// writes a read-write one that is committed when fn succeeds.
+func withTenantTx(ctx context.Context, db *sql.DB, tenantID string, readOnly bool, fn func(*sql.Tx) error) error {
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: readOnly})
 	if err != nil {
-		return fmt.Errorf("data: begin read transaction: %w", err)
+		return fmt.Errorf("data: begin transaction: %w", err)
 	}
 	defer tx.Rollback()
 
 	if _, err := tx.ExecContext(ctx,
-		`SELECT set_config('kura.tenant_id', $1, true)`, s.tenantID); err != nil {
+		`SELECT set_config('kura.tenant_id', $1, true)`, tenantID); err != nil {
 		return fmt.Errorf("data: setting tenant scope: %w", err)
 	}
 	if err := fn(tx); err != nil {
 		return err
 	}
-	return tx.Rollback()
+	return tx.Commit()
 }

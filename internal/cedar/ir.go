@@ -54,10 +54,12 @@ func (a Action) isRead() bool {
 }
 
 // Role is a named bundle of permissions. Principals are assigned roles;
-// grants attach permissions to roles.
+// grants attach permissions to roles. The JSON tags are deliberate: the
+// IR is the model an adapter renders read-only (the HTTP API's policy
+// endpoint, the dashboard's structured viewer).
 type Role struct {
-	Name        string
-	Description string
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
 }
 
 // Grant permits a Role to perform an Action on an Entity. For read and
@@ -65,18 +67,18 @@ type Role struct {
 // plaintext — any category not listed is masked. VisiblePII must be
 // empty for non-read actions.
 type Grant struct {
-	Role       string
-	Entity     string
-	Action     Action
-	VisiblePII []pii.Category
+	Role       string         `json:"role"`
+	Entity     string         `json:"entity"`
+	Action     Action         `json:"action"`
+	VisiblePII []pii.Category `json:"visiblePII,omitempty"`
 }
 
 // Policy is the IR: the roles a deployment defines and the grants that
 // give them permissions. It is permit-only — there is deny-by-default
 // and no forbid rules, which is what keeps it the safe subset.
 type Policy struct {
-	Roles  []Role
-	Grants []Grant
+	Roles  []Role  `json:"roles"`
+	Grants []Grant `json:"grants"`
 }
 
 // ValidateAgainst checks the policy is internally consistent and that

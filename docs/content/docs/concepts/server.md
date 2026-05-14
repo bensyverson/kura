@@ -83,6 +83,38 @@ exist at all — exactly right for a server that has no schema yet.
   in-memory `MemStore` and the Postgres-backed `PostgresStore` satisfy
   the same interface, so the server is indifferent to which one it has.
 
+## Admin endpoints: users, roles, and policy
+
+Beyond the manifest's data, the server exposes a small administrative
+surface — the authorized-user list, role assignments, and read access to
+the effective policy. These are not manifest entities, so they do not go
+through `Gate.Access`/`List`; they go through **`Gate.Admin`**, which
+runs the same chain without the data steps. They are gated routes all
+the same — authorized and audited by construction.
+
+| Route | Through the gate | Who |
+| --- | --- | --- |
+| `POST /api/users` | `AdminManage` | admin |
+| `GET /api/users` | `AdminReview` | admin or auditor |
+| `POST /api/users/{email}/roles` | `AdminManage` | admin |
+| `DELETE /api/users/{email}/roles` | `AdminManage` | admin |
+| `GET /api/users/mismatches` | `AdminReview` | admin or auditor |
+| `GET /api/policy` | `AdminReview` | admin or auditor |
+
+- **Mutations are the admin role's alone**; the reads — the authorized
+  list, the effective policy, the IdP mismatches — are access-review
+  work the read-only auditor may also do.
+- **Role assignment and revocation are variadic and atomic**: a request
+  carries a set of role names, and the store applies the whole set or
+  none of it. Adding a user to the list and granting them roles are
+  *distinct* operations — a role op on a user not on the list is a `404`.
+- **`/api/policy` is read-only.** The effective policy is rendered from
+  the [Cedar IR](policy); there is no write method on the route, because
+  policy authoring stays a repo/PR activity, not a server endpoint.
+- **IdP mismatches** — a suspended or absent Google Workspace account
+  that still holds Kura roles — are surfaced by `GET /api/users/mismatches`,
+  which cross-checks the authorized list against the identity provider.
+
 ## Sign-in: the loopback OAuth handoff
 
 The token a request carries is minted by `kura serve` after a Google

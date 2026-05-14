@@ -100,12 +100,9 @@ func TestEntityRoutesExistForEveryManifestEntity(t *testing.T) {
 		"GET /api/doctor", "GET /api/doctor/{id}",
 	}
 	for _, pattern := range want {
-		if _, ok := srv.dataRoutes[pattern]; !ok {
+		if _, ok := srv.apiRoutes[pattern]; !ok {
 			t.Errorf("no data route registered for %q", pattern)
 		}
-	}
-	if len(srv.dataRoutes) != len(want) {
-		t.Errorf("registered %d data routes, want %d: %v", len(srv.dataRoutes), len(want), srv.dataRoutes)
 	}
 }
 

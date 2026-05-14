@@ -123,7 +123,14 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	// every enforcement event lands in one log.
 	recorder := audit.NewRecorder(audit.NewMemStore())
 
-	g, err := buildGate(auth, recorder, detectorURL)
+	// MemUserStore is the v1 backing for the authorized-user list. The
+	// Postgres-backed UserStore is its own build-plan task; until it
+	// lands the server keeps the list in memory. The same store both
+	// resolves roles for the gate and is the admin endpoints' management
+	// surface, so enforcement and management never drift.
+	users := data.NewMemUserStore()
+
+	g, err := buildGate(auth, recorder, users, detectorURL)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -140,6 +147,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// With the empty startup manifest no data routes are generated,
 		// so nothing reads it yet anyway.
 		Records: data.NewMemStore(),
+		Users:   users,
+		// FakeIdPDirectory is the v1 placeholder: the real Google Admin
+		// Directory client is its own build-plan task. Until it lands,
+		// IdP-mismatch detection reports no mismatches.
+		IdP: identity.NewFakeIdPDirectory(),
 		Trust: identity.DomainTrust{
 			FirmDomain:    firmDomain,
 			ClientDomains: splitList(getenv("KURA_CLIENT_DOMAINS")),
@@ -152,17 +164,18 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 // every data read to. The manifest and Cedar policy are loaded from the
 // deployment repo at startup — a later build-plan task; until that wiring
 // lands the gate runs on an empty manifest, which is consistent with the
-// server having no data routes registered yet. The PII detector and the
-// authenticator are real, and the recorder is shared with the server so
-// authentication and access land in one audit log.
-func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, detectorURL string) (*gate.Gate, error) {
+// server having no data routes registered yet. The PII detector, the
+// authenticator, and the role-resolving user store are real, and the
+// recorder is shared with the server so authentication and access land
+// in one audit log.
+func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gate.RoleResolver, detectorURL string) (*gate.Gate, error) {
 	m := &manifest.Manifest{Version: "1"}
 	evaluator, err := cedar.NewEvaluator(cedar.DefaultPolicy(m))
 	if err != nil {
 		return nil, fmt.Errorf("serve: building authorization evaluator: %w", err)
 	}
 	scanner := pii.NewScanner(pii.NewServiceDetector(detectorURL))
-	return gate.New(auth, evaluator, gate.NewMapRoleResolver(), m, scanner, recorder)
+	return gate.New(auth, evaluator, roles, m, scanner, recorder)
 }
 
 // splitList parses a comma-separated environment variable into a

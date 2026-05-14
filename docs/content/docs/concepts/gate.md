@@ -14,10 +14,10 @@ The HTTP API, the CLI's `--local` path, the local dashboard, and the MCP
 server all go through the gate and nothing else. None of them may
 reconstruct any of these steps themselves — that is the whole point.
 
-## Two verbs: `Access` and `List`
+## Three verbs: `Access`, `List`, and `Admin`
 
-The gate exposes exactly two entrypoints, and they are the same welded
-chain in two shapes:
+The gate exposes exactly three entrypoints, and they are the same welded
+chain in three shapes:
 
 - **`Access`** reads one record. The authorization step asks the `read`
   question; the `Fetcher` returns one record's fields.
@@ -26,6 +26,15 @@ chain in two shapes:
   a page; every record in the page is masked; and the whole page is **one
   audit event** — a list happened, on the entity, touching no single
   record id.
+- **`Admin`** runs an administrative operation — managing the
+  authorized-user list, assigning roles, reading effective policy. It
+  touches no manifest entity and no PII, so it is the chain *with the
+  data steps absent*: authenticate → authorize → run the operation →
+  audit. The operation is a caller-supplied callback the gate runs only
+  after authorization passes, exactly as `Access` owns its `Fetcher`.
+  `AdminManage` (mutations) needs the admin role; `AdminReview` (reads —
+  effective policy, IdP mismatches) is access-review work the auditor may
+  also do.
 
 `List` is **bounded by construction**. A request with no limit gets the
 default page size; one asking for more than the ceiling is clamped to it.
@@ -34,6 +43,10 @@ dump an unbounded result set no matter what it asks for. The effective
 limit and offset come back in the result, so a caller can page without
 guessing what bounds it got. The default and ceiling page sizes are
 `DefaultPageSize` and `MaxPageSize` in the `gate` package.
+
+The effective policy the gate enforces is readable through
+`Gate.Policy()` — read-only, because policy authoring stays a repo/PR
+activity, never a server write path.
 
 ## The chain
 
@@ -50,9 +63,9 @@ guessing what bounds it got. The default and ceiling page sizes are
 The criterion for the gate is that **skipping a step is impossible by
 construction**. Four properties enforce that:
 
-- **Two verbs, no subsets.** `Gate` exposes only `Access` and `List`.
-  There is no public method that performs a subset — no standalone
-  "authorize" or "mask" an adapter could call instead.
+- **Three verbs, no subsets.** `Gate` exposes only `Access`, `List`, and
+  `Admin`. There is no public method that performs a subset — no
+  standalone "authorize" or "mask" an adapter could call instead.
 
 - **The Fetcher is not an escape hatch.** The data read is caller-supplied,
   but the gate owns *when* it runs (only after authorization passes) and

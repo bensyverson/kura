@@ -124,19 +124,19 @@ func TestGatedRouteEmitsAuditEvent(t *testing.T) {
 
 // RLg: the architectural guard — every route mounted under /api/ goes
 // through the core gate. A route that bypasses the gate cannot even be
-// registered: dataRoutes is a map of gatedRoute, and a raw handler does
+// registered: apiRoutes is a map of gatedRoute, and a raw handler does
 // not satisfy gatedRoute.
 func TestEveryDataRouteIsGated(t *testing.T) {
 	srv, _, _ := entitiesServer(t)
-	if len(srv.dataRoutes) == 0 {
+	if len(srv.apiRoutes) == 0 {
 		t.Fatal("no data routes registered to check")
 	}
-	for pattern, h := range srv.dataRoutes {
+	for pattern, h := range srv.apiRoutes {
 		switch h.(type) {
-		case *gatedHandler, *gatedListHandler:
+		case *gatedHandler, *gatedListHandler, *adminHandler:
 			// ok — a thin wrapper that delegates to the gate
 		default:
-			t.Errorf("data route %q is %T, not a gated handler — it could serve a response that bypassed the gate", pattern, h)
+			t.Errorf("api route %q is %T, not a gated handler — it could serve a response that bypassed the gate", pattern, h)
 		}
 	}
 

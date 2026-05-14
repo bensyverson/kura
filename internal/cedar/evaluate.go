@@ -12,6 +12,7 @@ import (
 // wraps the Cedar engine — Kura never re-implements Cedar evaluation.
 type Evaluator struct {
 	policies *cedarengine.PolicySet
+	policy   *Policy // the IR this was compiled from, kept for rendering
 }
 
 // NewEvaluator compiles the IR and loads it into the Cedar engine. The
@@ -26,8 +27,14 @@ func NewEvaluator(p *Policy) (*Evaluator, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cedar: load policy set: %w", err)
 	}
-	return &Evaluator{policies: ps}, nil
+	return &Evaluator{policies: ps, policy: p}, nil
 }
+
+// Policy returns the IR the evaluator was compiled from. The effective
+// policy is read-only here — authoring stays a repo/PR activity — so an
+// adapter that surfaces "what may each role do" renders this rather than
+// re-deriving it.
+func (e *Evaluator) Policy() *Policy { return e.policy }
 
 // Request is a single authorization question: may this principal, in
 // these roles, perform this action on this resource — and of the PII

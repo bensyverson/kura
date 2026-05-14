@@ -19,6 +19,12 @@ never changes when a client's manifest does.
 | `kura.records` | One row per record. `entity` is a free-text discriminator. |
 | `kura.record_field_values` | One row per (record, field). A value is either a plain scalar or pgcrypto ciphertext — never both. |
 | `kura.pii_spans` | Detected-PII metadata (category, byte offset, length, confidence) produced at ingestion. The source text never lives here. |
+| `kura.users` | The authorized-user list — one row per email allowed to hold a principal in this deployment. |
+| `kura.role_assignments` | Which roles each authorized user holds. A user with no rows here is on the list but has no access. |
+
+Roles are stored as free text, matching the [Cedar policy IR's](../policy/)
+role names — the same manifest-agnostic discipline: the static schema
+never changes when a deployment edits its entities or its role set.
 
 Migrations live in `internal/migrations/` as numbered `NNNN_name.sql` files, embedded
 into the binary. An automatic runner (`internal/db.Migrate`) applies pending
@@ -123,3 +129,13 @@ Two implementations satisfy the interface:
   `PostgresStore` connects as the RLS-bound `kura_api` role — never a superuser — so
   the tenant-isolation guarantee is real and not an accident of which role ran the
   query.
+
+The authorized-user list has the same shape of seam: `UserStore`, also in
+`internal/data`, with an in-memory `MemUserStore` and a Postgres-backed
+`PostgresUserStore` over `kura.users` / `kura.role_assignments`. It runs every
+operation in a tenant-scoped transaction just as `PostgresStore` does — reads
+read-only, the variadic role mutations as one read-write transaction, which is what
+makes them atomic. `UserStore` also *is* the [gate's](../gate/) role resolver: the
+same store both manages access and answers "what roles does this principal hold" when
+the gate enforces it, so management and enforcement can never drift onto separate
+copies.

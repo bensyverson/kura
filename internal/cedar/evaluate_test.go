@@ -25,6 +25,19 @@ func contains(cs []pii.Category, want pii.Category) bool {
 	return slices.Contains(cs, want)
 }
 
+// The evaluator keeps a reference to the IR it was compiled from, so an
+// adapter can render the effective policy without re-deriving it.
+func TestEvaluatorExposesItsPolicy(t *testing.T) {
+	p := DefaultPolicy(testManifest(t))
+	e, err := NewEvaluator(p)
+	if err != nil {
+		t.Fatalf("NewEvaluator: %v", err)
+	}
+	if e.Policy() != p {
+		t.Error("Evaluator.Policy did not return the policy it was compiled from")
+	}
+}
+
 func TestEvaluatorAllowsByRole(t *testing.T) {
 	e := testEvaluator(t)
 

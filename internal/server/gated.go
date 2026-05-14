@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -10,14 +11,14 @@ import (
 	"github.com/bensyverson/kura/internal/identity"
 )
 
-// gatedRoute is the interface every data route mounted under /api/ must
+// gatedRoute is the interface every route mounted under /api/ must
 // satisfy. Its unexported marker method means a type satisfies it only
 // by being defined in this package — and the only types here that do are
 // the gated handlers, each a thin wrapper that delegates to the core
-// gate. registerData and registerListData are the only constructors;
-// dataRoutes is typed as a map of gatedRoute, so a raw http.Handler
-// cannot even be stored as a data route. The architectural test asserts
-// the invariant a second time, with teeth.
+// gate. registerData, registerListData, and registerAdmin are the only
+// constructors; apiRoutes is typed as a map of gatedRoute, so a raw
+// http.Handler cannot even be stored as a route. The architectural test
+// asserts the invariant a second time, with teeth.
 type gatedRoute interface {
 	http.Handler
 	gatedThroughCore()
@@ -119,14 +120,69 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// adminBinding translates an authenticated request into a gate
+// AdminRequest and the operation to run under it once authorization
+// passes. Like the data bindings it never touches the ResponseWriter:
+// it describes the request and supplies the operation, and the handler
+// serializes whatever the operation returns.
+type adminBinding func(r *http.Request, p identity.Principal) (gate.AdminRequest, adminOp, error)
+
+// adminOp is the operation an adminBinding hands the gate. The gate runs
+// it only after the admin authorization passes; its result — nil for a
+// mutation with no body — is what the handler serializes.
+type adminOp func(ctx context.Context) (any, error)
+
+// adminHandler serves a user/role/policy administrative endpoint. It
+// owns the call to Gate.Admin; the adminBinding it wraps never touches
+// the ResponseWriter.
+type adminHandler struct {
+	gate    *gate.Gate
+	binding adminBinding
+}
+
+func (*adminHandler) gatedThroughCore() {}
+
+// ServeHTTP runs the bound admin request through the gate and serializes
+// the operation's result. The gate authorizes, runs the operation, and
+// audits it; the handler only renders the outcome.
+func (h *adminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, op, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	var result any
+	if _, err := h.gate.Admin(r.Context(), req, func(ctx context.Context) error {
+		var opErr error
+		result, opErr = op(ctx)
+		return opErr
+	}); err != nil {
+		writeGateError(w, err)
+		return
+	}
+	if result == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, result)
+}
+
 // writeGateError maps an error from the gate to an HTTP status. A denied
-// request is a 403, an unknown entity or a missing record is a 404, and
-// anything else is a 500 — the gate does not leak why past these.
+// request is a 403; an unknown entity, a missing record, or a user not
+// on the authorized list is a 404; anything else is a 500 — the gate
+// does not leak why past these.
 func writeGateError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, gate.ErrDenied):
 		http.Error(w, "forbidden", http.StatusForbidden)
-	case errors.Is(err, gate.ErrUnknownEntity), errors.Is(err, data.ErrNotFound):
+	case errors.Is(err, gate.ErrUnknownEntity),
+		errors.Is(err, data.ErrNotFound),
+		errors.Is(err, data.ErrUserNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -145,18 +201,28 @@ func writeJSON(w http.ResponseWriter, v any) {
 // the two sanctioned ways to add a data route: it produces a
 // *gatedHandler, so the route goes through the gate by construction.
 func (s *Server) registerData(pattern string, binding dataBinding) {
-	if s.dataRoutes == nil {
-		s.dataRoutes = make(map[string]gatedRoute)
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
 	}
-	s.dataRoutes[pattern] = &gatedHandler{gate: s.cfg.Gate, binding: binding}
+	s.apiRoutes[pattern] = &gatedHandler{gate: s.cfg.Gate, binding: binding}
 }
 
 // registerListData mounts a list route under /api/. Like registerData,
 // it produces a gated handler — a *gatedListHandler — so the route goes
 // through the gate by construction.
 func (s *Server) registerListData(pattern string, binding listBinding) {
-	if s.dataRoutes == nil {
-		s.dataRoutes = make(map[string]gatedRoute)
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
 	}
-	s.dataRoutes[pattern] = &gatedListHandler{gate: s.cfg.Gate, binding: binding}
+	s.apiRoutes[pattern] = &gatedListHandler{gate: s.cfg.Gate, binding: binding}
+}
+
+// registerAdmin mounts an administrative route under /api/. Like the
+// data registrars it produces a gated handler — a *adminHandler — so the
+// route delegates to Gate.Admin by construction.
+func (s *Server) registerAdmin(pattern string, binding adminBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &adminHandler{gate: s.cfg.Gate, binding: binding}
 }

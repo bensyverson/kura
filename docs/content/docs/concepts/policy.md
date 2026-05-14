@@ -18,6 +18,9 @@ ceremony.
 - **PR-gating comes for free.** Changing the repo *is* a pull request, so every
   policy change is already reviewed and history-tracked — no separate approval
   mechanism needed.
+- **The API reads, never writes.** `GET /api/policy` renders the effective policy
+  from the IR for review; there is no write method on the route. Reading policy is
+  a server endpoint; authoring it is not.
 
 ## Why nothing more, yet
 

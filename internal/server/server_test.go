@@ -46,6 +46,8 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		TokenTTL: time.Hour,
 		Gate:     g,
 		Records:  data.NewMemStore(),
+		Users:    data.NewMemUserStore(),
+		IdP:      identity.NewFakeIdPDirectory(),
 	}, auth
 }
 

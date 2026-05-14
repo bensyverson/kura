@@ -32,9 +32,9 @@ const defaultTokenTTL = 12 * time.Hour
 
 // ErrMissingDependency is returned by New when a required enforcement
 // collaborator is nil. A server that cannot resolve a token, record an
-// audit event, run a request through the core gate, or read a record
-// must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, and a record store")
+// audit event, run a request through the core gate, read a record, or
+// manage the authorized-user list must not come into existence.
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, and an IdP directory")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -68,6 +68,15 @@ type Config struct {
 	// The gate owns enforcement; Records just supplies the raw bytes.
 	// Required.
 	Records data.RecordStore
+	// Users is the authorized-user list and role assignments — the
+	// surface the admin endpoints manage. It is the same store that
+	// resolves roles for the Gate, so management and enforcement never
+	// drift onto separate copies. Required.
+	Users data.UserStore
+	// IdP reports identity-provider account status, so the admin
+	// endpoints can surface a mismatch — a suspended account still
+	// holding a role. Required.
+	IdP identity.IdPDirectory
 	// Trust maps a verified Workspace domain to a Kura principal type. A
 	// zero Trust trusts no domain — fail-closed, but useless.
 	Trust identity.DomainTrust
@@ -82,13 +91,14 @@ type Server struct {
 	oauth *oauthHandler
 	http  *http.Server
 
-	// dataRoutes is every handler mounted under /api/, keyed by pattern.
-	// Its value type is gatedRoute, not http.Handler: only a gated
-	// handler can be stored as a data route, so a route that bypasses
-	// the gate cannot be registered. registerData and registerListData
-	// are the only writers; the architectural test asserts the invariant
-	// a second time, with teeth.
-	dataRoutes map[string]gatedRoute
+	// apiRoutes is every handler mounted under /api/, keyed by pattern —
+	// the manifest-driven data routes and the admin routes alike. Its
+	// value type is gatedRoute, not http.Handler: only a handler that
+	// delegates to the core gate can be stored here, so a route that
+	// bypasses the gate cannot be registered. registerData,
+	// registerListData, and registerAdmin are the only writers; the
+	// architectural test asserts the invariant a second time, with teeth.
+	apiRoutes map[string]gatedRoute
 
 	ready     chan struct{} // closed once the listener is bound
 	readyOnce sync.Once
@@ -102,7 +112,8 @@ type Server struct {
 // enforcement collaborator is nil. It does not bind a socket — Run does
 // that.
 func New(cfg Config) (*Server, error) {
-	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil || cfg.Records == nil {
+	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
+		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -121,6 +132,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	s.http = &http.Server{}
 	s.registerEntityRoutes()
+	s.registerAdminRoutes()
 	return s, nil
 }
 
@@ -147,13 +159,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /oauth/login", s.oauth.login)
 	mux.HandleFunc("GET /oauth/callback", s.oauth.callback)
 
-	// Data routes. Each is a gatedHandler registered through
-	// registerData — there is no other path onto this subtree. An
-	// authenticated request to an unregistered /api path 404s; an
-	// unauthenticated one is rejected by requireAuth before it reaches
-	// any handler.
+	// API routes — manifest-driven data routes and admin routes. Each is
+	// a gatedRoute, so it delegates to the core gate; there is no other
+	// path onto this subtree. An authenticated request to an
+	// unregistered /api path 404s; an unauthenticated one is rejected by
+	// requireAuth before it reaches any handler.
 	api := http.NewServeMux()
-	for pattern, h := range s.dataRoutes {
+	for pattern, h := range s.apiRoutes {
 		api.Handle(pattern, h)
 	}
 	api.Handle("/api/", http.NotFoundHandler())
