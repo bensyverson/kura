@@ -14,6 +14,7 @@ The mental model behind Kura: the core enforcement library and the thin adapters
   {{< card link="secrets" title="Secrets" subtitle="The runtime-injection model and the Doppler secrets-backend decision." >}}
   {{< card link="policy" title="Cedar policy" subtitle="The v1 deploy-time policy-apply posture." >}}
   {{< card link="iac" title="Infrastructure as code" subtitle="The Terraform-for-IaC decision for the Standard-Regulated baseline." >}}
+  {{< card link="storage" title="Object storage" subtitle="The two buckets outside Postgres — distinct credentials, retention as policy, the deny-delete posture." >}}
 {{< /cards >}}
 
 Other concept pages are filled in as the core enforcement library lands.
