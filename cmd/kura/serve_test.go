@@ -3,17 +3,21 @@ package main
 import "testing"
 
 // serveEnv is a complete set of the environment variables serveConfig
-// requires, for tests to start from and then perturb.
+// requires, for tests to start from and then perturb. It includes the
+// optional LLM-gateway variables so the baseline produces a working
+// gateway; tests that care about its absence delete them.
 func serveEnv() map[string]string {
 	return map[string]string{
-		"KURA_SIGNING_SECRET":       "a-test-signing-secret",
-		"KURA_GOOGLE_CLIENT_ID":     "client-id.apps.googleusercontent.com",
-		"KURA_GOOGLE_CLIENT_SECRET": "google-client-secret",
-		"KURA_PUBLIC_URL":           "https://kura.client.example",
-		"KURA_FIRM_DOMAIN":          "examplefirm.com",
-		"KURA_PII_DETECTOR_URL":     "http://127.0.0.1:9100/detect",
-		"KURA_CLIENT_DOMAINS":       "client.example",
-		"KURA_ADMIN_EMAILS":         "boss@client.example",
+		"KURA_SIGNING_SECRET":        "a-test-signing-secret",
+		"KURA_GOOGLE_CLIENT_ID":      "client-id.apps.googleusercontent.com",
+		"KURA_GOOGLE_CLIENT_SECRET":  "google-client-secret",
+		"KURA_PUBLIC_URL":            "https://kura.client.example",
+		"KURA_FIRM_DOMAIN":           "examplefirm.com",
+		"KURA_PII_DETECTOR_URL":      "http://127.0.0.1:9100/detect",
+		"KURA_CLIENT_DOMAINS":        "client.example",
+		"KURA_ADMIN_EMAILS":          "boss@client.example",
+		"KURA_ANTHROPIC_API_KEY":     "sk-ant-test-key",
+		"KURA_ANTHROPIC_DPA_ON_FILE": "true",
 	}
 }
 
@@ -85,6 +89,48 @@ func TestServeCommandIsWired(t *testing.T) {
 	}
 	if serve.Flags().Lookup("addr") == nil {
 		t.Fatal("serve in the command tree is still the not-implemented stub (no --addr flag)")
+	}
+}
+
+// With the API key present and the DPA attested on file, serveConfig
+// builds a working LLM gateway — the /api/llm endpoint will serve.
+func TestServeConfigBuildsLLMGatewayWhenDPAOnFile(t *testing.T) {
+	env := serveEnv()
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	if cfg.LLM == nil {
+		t.Error("serveConfig built no LLM gateway when the API key and DPA attestation were both present")
+	}
+}
+
+// When the DPA is not attested on file, the startup DPA check fails:
+// serveConfig still produces a usable Config — the server runs — but
+// leaves the LLM gateway nil, so the /api/llm endpoint refuses to serve.
+func TestServeConfigLeavesLLMGatewayNilWhenDPANotOnFile(t *testing.T) {
+	env := serveEnv()
+	delete(env, "KURA_ANTHROPIC_DPA_ON_FILE")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig must still succeed without a DPA on file: %v", err)
+	}
+	if cfg.LLM != nil {
+		t.Error("serveConfig built an LLM gateway when the DPA was not on file — the startup check must fail closed")
+	}
+}
+
+// With no Anthropic API key there is no provider to broker, so there is
+// no gateway — the endpoint refuses to serve, like the DPA-failed case.
+func TestServeConfigLeavesLLMGatewayNilWithoutAPIKey(t *testing.T) {
+	env := serveEnv()
+	delete(env, "KURA_ANTHROPIC_API_KEY")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig must still succeed without an LLM API key: %v", err)
+	}
+	if cfg.LLM != nil {
+		t.Error("serveConfig built an LLM gateway with no API key")
 	}
 }
 

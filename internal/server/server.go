@@ -20,6 +20,7 @@ import (
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/llm"
 )
 
 // defaultShutdownTimeout bounds how long Run waits for in-flight requests
@@ -83,6 +84,13 @@ type Config struct {
 	// other than the one being written to would serve a stale or empty
 	// log, so the deployment passes one store to all three. Required.
 	Audit audit.Store
+	// LLM is the core LLM gateway the /api/llm endpoint brokers calls
+	// through. Unlike the other collaborators it is optional: the gateway
+	// fails closed at construction for a provider whose DPA is not on
+	// file, so a nil LLM means the startup DPA check did not pass. The
+	// endpoint is still mounted in that case — it answers 503, a reported
+	// "unavailable", rather than vanishing into a 404.
+	LLM *llm.Gateway
 	// Trust maps a verified Workspace domain to a Kura principal type. A
 	// zero Trust trusts no domain — fail-closed, but useless.
 	Trust identity.DomainTrust
@@ -141,6 +149,7 @@ func New(cfg Config) (*Server, error) {
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
 	s.registerAuditRoutes()
+	s.registerLLMRoute()
 	return s, nil
 }
 

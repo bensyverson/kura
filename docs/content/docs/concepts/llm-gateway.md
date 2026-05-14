@@ -52,3 +52,22 @@ no network.
 The Heavily-Regulated tier routes to the provider over a private network path
 (Bedrock VPC endpoint, Vertex Private Service Connect); that is an
 infrastructure concern, not a change to this gateway.
+
+## Over the HTTP API
+
+The `kura serve` HTTP API exposes the gateway as one endpoint:
+
+| Endpoint | Body |
+| --- | --- |
+| `POST /api/llm` | Request: `{ "model", "prompt", "max_tokens" }`. Response: `{ "content", "input_tokens", "output_tokens" }`. |
+
+Callers go through this endpoint rather than calling the provider directly, so
+the DPA check and the metadata logging are enforced for every call — there is
+no other path to the provider.
+
+If the **startup DPA check failed** there is no gateway, and the endpoint
+**refuses to serve**: it answers `503 Service Unavailable` rather than `404`,
+so the endpoint's absence is a reported condition, not a silent gap. The server
+itself still runs — a missing DPA disables the LLM endpoint, it does not stop
+`kura serve`. The endpoint is wired from `KURA_ANTHROPIC_API_KEY` and
+`KURA_ANTHROPIC_DPA_ON_FILE`; without either, it is unavailable.

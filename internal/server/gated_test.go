@@ -133,7 +133,7 @@ func TestEveryDataRouteIsGated(t *testing.T) {
 	}
 	for pattern, h := range srv.apiRoutes {
 		switch h.(type) {
-		case *gatedHandler, *gatedListHandler, *adminHandler, *auditStreamHandler:
+		case *gatedHandler, *gatedListHandler, *adminHandler, *auditStreamHandler, *llmHandler:
 			// ok — a thin wrapper that delegates to the gate
 		default:
 			t.Errorf("api route %q is %T, not a gated handler — it could serve a response that bypassed the gate", pattern, h)

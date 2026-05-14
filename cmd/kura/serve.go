@@ -13,6 +13,7 @@ import (
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/llm"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
 	"github.com/bensyverson/kura/internal/server"
@@ -49,7 +50,12 @@ Configuration is read from the environment:
   KURA_CLIENT_DOMAINS        comma-separated client Workspace domains;
                              humans on them are Users
   KURA_ADMIN_EMAILS          comma-separated client-domain emails granted
-                             the elevated Admin principal type`,
+                             the elevated Admin principal type
+  KURA_ANTHROPIC_API_KEY     Anthropic API key for the LLM gateway; unset
+                             leaves the /api/llm endpoint unavailable (503)
+  KURA_ANTHROPIC_DPA_ON_FILE set truthy to attest the controller's DPA is
+                             on file for Anthropic; without it the startup
+                             DPA check fails and /api/llm refuses to serve`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr, err := cmd.Flags().GetString("addr")
 			if err != nil {
@@ -144,6 +150,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		Audit:    auditStore,
 		Google:   google,
 		Gate:     g,
+		// LLM is optional: buildLLMGateway returns nil when the provider
+		// is not configured or its DPA is not on file, and the /api/llm
+		// endpoint then answers 503. A failed DPA check disables the LLM
+		// endpoint; it does not stop the server.
+		LLM: buildLLMGateway(getenv),
 		// MemStore is the v1 record-store backing for kura serve. The
 		// Postgres-backed RecordStore over kura.records is its own
 		// build-plan task; until it lands the server reads from memory.
@@ -179,6 +190,55 @@ func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gat
 	}
 	scanner := pii.NewScanner(pii.NewServiceDetector(detectorURL))
 	return gate.New(auth, evaluator, roles, m, scanner, recorder)
+}
+
+// buildLLMGateway assembles the core LLM gateway the /api/llm endpoint
+// brokers calls through, or returns nil when it cannot — in which case
+// the endpoint answers 503 and the rest of the server runs unaffected.
+//
+// It returns nil in three cases, all "the LLM endpoint is unavailable":
+// no Anthropic API key (nothing to authenticate the provider with), an
+// otherwise-unbuildable provider, and — the startup DPA check — the
+// controller's DPA not attested on file for the provider, which is what
+// KURA_ANTHROPIC_DPA_ON_FILE records. NewGateway fails closed on that
+// last case by construction; this wiring just surfaces nil rather than
+// crashing the server.
+//
+// The API key is read from the environment here, matching how the other
+// v1 secrets are wired; the secrets-manager injection path is its own
+// build-plan task. MemLog is the v1 metadata-log backing, like MemStore
+// is for audit.
+func buildLLMGateway(getenv func(string) string) *llm.Gateway {
+	apiKey := getenv("KURA_ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return nil
+	}
+	provider, err := llm.NewAnthropicProvider(apiKey)
+	if err != nil {
+		return nil
+	}
+	dpa := llm.NewDPAConfig()
+	if isTruthy(getenv("KURA_ANTHROPIC_DPA_ON_FILE")) {
+		dpa.Attest(provider.Name())
+	}
+	gateway, err := llm.NewGateway(provider, llm.NewMemLog(), dpa)
+	if err != nil {
+		// ErrDPANotOnFile lands here: the startup DPA check failed, so
+		// there is no gateway and the endpoint will refuse to serve.
+		return nil
+	}
+	return gateway
+}
+
+// isTruthy reports whether an environment variable's value is an
+// affirmative — the attestation flags are set, not parsed.
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 // splitList parses a comma-separated environment variable into a
