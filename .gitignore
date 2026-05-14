@@ -1,0 +1,18 @@
+# Binaries
+/kura
+
+# Database
+.jobs.db
+.jobs.db-wal
+.jobs.db-shm
+
+# Go
+vendor/
+/.gocache/
+/.gotmp/
+
+# OS
+.DS_Store
+
+# local files
+local/
