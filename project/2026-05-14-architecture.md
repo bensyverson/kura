@@ -137,8 +137,8 @@ thin repo plus the pinned version *is* the full spec.
 
 ### Declarative IaC, not `deploy.sh`
 
-The DigitalOcean Standard-Regulated deployment is declarative IaC (Terraform is the
-working assumption — confirm vs. Pulumi per the Phase 0 decision task).
+The DigitalOcean Standard-Regulated deployment is declarative IaC. Terraform (not
+Pulumi) — settled in Phase 0; see "Decisions already closed" below.
 
 **Why not a shell script:** an imperative script calling `doctl` is fragile,
 non-idempotent, and effectively untestable. Declarative IaC is idempotent, its
@@ -227,6 +227,24 @@ execute.
   off with the stack. Applied by the Phase 1 secrets-manager abstraction and the
   Phase 6 secrets-provisioning task. Heavily-Regulated stays agent-generated and may
   differ. Full record in `docs/content/docs/concepts/secrets.md`.
+- **v1 Cedar policy is loaded at deploy time — no live apply path.** The server
+  loads its Cedar policy from the deployment repo at startup; changing policy means
+  changing the repo and redeploying. There is no `kura policy apply` command and no
+  watch-and-reload in v1. **Why:** v1's Cedar UI is a read-only viewer, so nothing on
+  a running surface changes policy — a live apply path would solve a problem that
+  does not exist yet. PR-gating comes for free (a repo change is a PR). The dedicated
+  apply ceremony is revisited when the structured Cedar *editor* lands, decided then
+  against real requirements. Full record in
+  `docs/content/docs/concepts/policy.md`.
+- **The Standard-Regulated IaC baseline uses Terraform, not Pulumi.** Deciding
+  factor: the IaC ships in the thin per-client repo handed to an SMB tech owner, and
+  declarative HCL is far more readable to a non-Go person than Pulumi Go code —
+  "configuration is code" only helps if they can read it. Plan/apply also maps to the
+  playbook's "read the agent's plan before it runs," and the IaC test strategy
+  (tflint/Conftest, `terraform plan` snapshots) is already Terraform-shaped. Terraform
+  is a separate tool, not a Go-module dependency, so it does not touch Kura's
+  supply-chain surface. Scoped to Standard-Regulated; Heavily-Regulated stays
+  agent-generated. Full record in `docs/content/docs/concepts/iac.md`.
 - **Pragmatic minimalism on dependencies.** Aggressively avoid incidental and
   transitive dependencies — a smaller audit and supply-chain surface is a *security*
   posture for an open-source security product, not just aesthetics. But keep the
