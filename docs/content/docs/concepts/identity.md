@@ -91,3 +91,30 @@ entity Service {
 `User`.** Both authenticate with Google OAuth; the deployment config decides which
 Workspace domain maps to which principal type. An unauthenticated request resolves to
 *no principal* and is denied.
+
+## The token model
+
+The token **is** the identity. A request carries a short-lived token; resolving that
+token yields the principal, and every action is attributed to it. There is no
+anonymous path and no "trusted CLI" path — a request with no valid token resolves to
+no principal and is denied.
+
+Kura's tokens are **self-contained and HMAC-SHA256 signed**. A token carries the
+principal and an expiry, and the signature is verified on every resolve:
+
+- **Self-contained** — the token needs no server-side session store to validate. The
+  core identity layer has no storage or network dependency, which also means it is in
+  place before the database and the OAuth flow are.
+- **One fixed algorithm** — there is no algorithm field to negotiate, so there is no
+  algorithm-confusion attack surface.
+- **Injected signing secret** — the secret comes from the secrets manager (see
+  [Secrets](../secrets/)) and is rotatable; it is never baked in.
+
+Resolving a credential has exactly three failure modes, each distinct so a caller can
+act on them: *no credential* (unauthenticated), *malformed or unverified* (invalid
+token), and *verified but past expiry* (expired token). Only a fully valid token
+yields a principal.
+
+`kura login` performs the OAuth flow and obtains one of these short-lived tokens;
+issuing a token after a verified OAuth sign-in, and the HTTP middleware that resolves
+the token on every request, land in the Phase 2 server-auth task.
