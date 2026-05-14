@@ -204,6 +204,29 @@ execute.
   same IR. The viewer ships the IR model and the IR-to-Cedar compile path, so it is a
   genuine baby-step — nothing is throwaway. Free-form Cedar authoring stays a repo/PR
   activity.
+- **The consultant is a distinct Cedar principal type, authenticated against the
+  firm's own Workspace.** The consultant is `Consultant`, not a guest in the client's
+  Google Workspace. Authentication is Google OAuth against the consulting firm's own
+  Workspace domain — named per-deployment in the client's config; Kura hardwires no
+  firm identity. The client's config trusts that firm domain for the `Consultant`
+  type only, separately from the client domain that maps to `User`/`Admin`. The
+  consultant's agent acts *as* the consultant — `kura login` signs the consultant in
+  against the firm domain and the agent uses that short-lived token; there is no
+  per-agent principal in v1. **Why:** the firm (not the client) controls consultant
+  offboarding, consultant actions are distinct in the audit log, and engagement-end
+  is a config change (remove the firm-domain trust). Shapes `kura login`, the token
+  model, and the Cedar principal schema (Phase 1 identity, Phase 2 server-auth). Full
+  record in `docs/content/docs/concepts/identity.md`.
+- **The Standard-Regulated secrets backend is Doppler.** Self-hosted Vault was
+  rejected (too much ongoing ops for the SMB-tech-owner handoff target — it would rot
+  post-handoff); cross-cloud AWS Secrets Manager was rejected (forces a second cloud
+  account on a DO client, worse bootstrap). Doppler is low-ops, SOC 2-attested, does
+  runtime injection, and holds only secrets (never PII), so the added-sub-processor
+  surface is bounded. The Doppler account is client-owned — infra lives in the
+  client's account, never the firm's — provisioned during the engagement and handed
+  off with the stack. Applied by the Phase 1 secrets-manager abstraction and the
+  Phase 6 secrets-provisioning task. Heavily-Regulated stays agent-generated and may
+  differ. Full record in `docs/content/docs/concepts/secrets.md`.
 - **Pragmatic minimalism on dependencies.** Aggressively avoid incidental and
   transitive dependencies — a smaller audit and supply-chain surface is a *security*
   posture for an open-source security product, not just aesthetics. But keep the
