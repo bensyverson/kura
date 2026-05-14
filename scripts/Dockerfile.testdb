@@ -1,0 +1,24 @@
+# Postgres image for Kura's integration tests.
+#
+# It differs from stock postgres:18 in two ways the tests require:
+#
+#   * pgaudit is installed and is loaded via shared_preload_libraries at
+#     run time (set in scripts/test-db.sh), so CREATE EXTENSION pgaudit
+#     succeeds and VerifyExtensions reports it available — mirroring DO
+#     Managed Postgres, where pgaudit is an available extension.
+#   * a self-signed server certificate is baked in, so the server speaks
+#     TLS. Kura refuses non-TLS DSNs, so the test server must be
+#     TLS-capable.
+FROM postgres:18
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends postgresql-18-pgaudit openssl \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /etc/postgres-certs \
+ && openssl req -new -x509 -days 3650 -nodes \
+      -out /etc/postgres-certs/server.crt \
+      -keyout /etc/postgres-certs/server.key \
+      -subj "/CN=kura-test-db" \
+ && chmod 600 /etc/postgres-certs/server.key \
+ && chown -R postgres:postgres /etc/postgres-certs

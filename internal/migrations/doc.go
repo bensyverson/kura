@@ -5,6 +5,7 @@
 //
 // An automatic migration runner applies pending migrations on server
 // startup and records the current migration number in the database —
-// migrations are never run by hand. The runner itself lands in build-plan
-// Phase 1.
+// migrations are never run by hand. The runner lives in internal/db
+// (db.Migrate); this package embeds the SQL and exposes it as an ordered,
+// contiguously numbered list via All.
 package migrations
