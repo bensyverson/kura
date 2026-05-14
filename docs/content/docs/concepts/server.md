@@ -78,10 +78,10 @@ exist at all — exactly right for a server that has no schema yet.
   records alongside the effective `limit` and `offset`, so a client can
   page without guessing. A malformed pagination parameter is a `400`.
 - **The records come from a `RecordStore`** — the storage seam in the
-  `data` package. The bindings read through it; it knows nothing about
-  authorization or masking. Today that is an in-memory store; the
-  Postgres-backed implementation over the `kura.records` tables is a
-  separate build-plan task and slots in behind the same interface.
+  `data` package (see the [database layer](database)). The bindings read
+  through it; it knows nothing about authorization or masking. The
+  in-memory `MemStore` and the Postgres-backed `PostgresStore` satisfy
+  the same interface, so the server is indifferent to which one it has.
 
 ## Sign-in: the loopback OAuth handoff
 

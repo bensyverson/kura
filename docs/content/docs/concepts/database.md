@@ -96,3 +96,30 @@ enforces exactly one. Two kinds of value are always encrypted:
 Encryption uses `internal/db.EncryptValue` / `DecryptValue`, wrapping pgcrypto under
 an **app-managed key** supplied by the secrets manager. The key is never written to
 the database, and a wrong key fails loudly rather than returning garbage.
+
+## Reading records: the RecordStore
+
+The Go layer that turns those generic EAV rows back into records is the `RecordStore`
+interface in `internal/data`. It is the seam beneath the [gate](../gate/): the gate's
+`Fetcher` and `ListFetcher` callbacks read through a `RecordStore`, which is
+deliberately **enforcement-blind** — it returns raw field values and knows nothing
+about authorization or masking. Those belong to the gate; a store that did them would
+be a second, divergent enforcement point.
+
+Two implementations satisfy the interface:
+
+- **`MemStore`** — in-memory, for tests and adapters that have no database yet.
+- **`PostgresStore`** — the production store over `kura.records` /
+  `record_field_values`. It owns the two storage-layer concerns the schema demands:
+
+  - **Tenant isolation.** Every read runs inside a transaction that sets the
+    `kura.tenant_id` GUC (transaction-local, so it cannot leak across a pooled
+    connection), so the row-level-security policies bind. A store scoped to one tenant
+    cannot see another's rows.
+  - **Field decryption.** A field stored as `value_encrypted` is decrypted with the
+    app-managed key as part of the read query. The store hands back plaintext; the
+    bytes at rest stay ciphertext.
+
+  `PostgresStore` connects as the RLS-bound `kura_api` role — never a superuser — so
+  the tenant-isolation guarantee is real and not an accident of which role ran the
+  query.
