@@ -12,8 +12,8 @@ threat model.
 
 The audit log records *that* something happened and *who* did it — **never what the
 data was**. An audit `Event` carries only structured metadata: a timestamp, the event
-kind, the outcome, the actor (a Cedar principal), the action, and a resource
-*identifier* (entity name + record id).
+kind, the outcome, the actor (a Cedar principal), the action, a resource *identifier*
+(entity name + record id), and the real client IP the request came from.
 
 This is enforced structurally, not by discipline. The `Event` type has no field — no
 byte slice, no map, no `interface{}` — that could hold opaque content, and the
@@ -35,6 +35,14 @@ tell "who got in" apart from "what they were allowed to touch."
 Every gate path funnels through the `Recorder` — `RecordAuthentication`,
 `RecordAuthorization`, `RecordAccess` — so emitting an audit event is not something a
 caller can forget.
+
+### The client IP rides the context
+
+The real client IP is request-scoped, not something every `Record*` call should have
+to thread by hand. The adapter serving a request sets it once at the boundary — the
+HTTP API reads the forwarded `X-Forwarded-For` IP — and the `Recorder` reads it back
+off the context for every event it writes. An event recorded outside a request, such
+as a CLI-local access, simply carries an empty IP.
 
 ## Querying and streaming
 

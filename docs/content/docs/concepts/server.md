@@ -28,9 +28,24 @@ JSON API and the OAuth callback, nothing more.
   authentication is recorded — a rejected credential is an audit-worthy
   event. A resolved principal is carried to the handler on the request
   context.
+- **The gate boundary.** Every data route under `/api/` is a
+  `gatedHandler` — a handler whose only job is to delegate to
+  [`Gate.Access`](gate) and serialize the masked result. A data route is
+  not registered with a free-form `http.HandlerFunc`; it is registered
+  through `registerData`, which supplies a *binding*: a function that
+  describes the gate request and the underlying read, and is handed no
+  `ResponseWriter` of its own. The binding cannot return a response that
+  skipped the gate, because it never gets to write a response at all. An
+  architectural test asserts that every route under `/api/` is a
+  `gatedHandler`; a route added any other way fails it.
 - **Structured request logging** to stderr — one line per request with
   method, path, status, duration, and client IP. Request telemetry is
   operational output, never mixed into a response body.
+- **Real client IP on every audit event.** A middleware reads the
+  forwarded client IP once at the request boundary and carries it on the
+  request context, so every audit event the gate writes while serving the
+  request — authentication, authorization, access — is stamped with the
+  IP the request actually came from.
 - **Graceful shutdown.** `SIGINT` / `SIGTERM` drains in-flight requests
   within a bounded timeout, then exits cleanly.
 

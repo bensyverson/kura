@@ -30,6 +30,7 @@ func (r *Recorder) RecordAuthentication(ctx context.Context, actor identity.Prin
 		Kind:    KindAuthentication,
 		Outcome: outcome,
 		Actor:   actor,
+		IP:      ClientIP(ctx),
 	})
 }
 
@@ -43,6 +44,7 @@ func (r *Recorder) RecordAuthorization(ctx context.Context, actor identity.Princ
 		Actor:    actor,
 		Action:   action,
 		Resource: resource,
+		IP:       ClientIP(ctx),
 	})
 }
 
@@ -57,5 +59,6 @@ func (r *Recorder) RecordAccess(ctx context.Context, actor identity.Principal, a
 		Actor:    actor,
 		Action:   action,
 		Resource: resource,
+		IP:       ClientIP(ctx),
 	})
 }

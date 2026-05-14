@@ -11,6 +11,7 @@ func serveEnv() map[string]string {
 		"KURA_GOOGLE_CLIENT_SECRET": "google-client-secret",
 		"KURA_PUBLIC_URL":           "https://kura.client.example",
 		"KURA_FIRM_DOMAIN":          "examplefirm.com",
+		"KURA_PII_DETECTOR_URL":     "http://127.0.0.1:9100/detect",
 		"KURA_CLIENT_DOMAINS":       "client.example",
 		"KURA_ADMIN_EMAILS":         "boss@client.example",
 	}
@@ -37,6 +38,17 @@ func TestServeConfigRequiresGoogleCredentials(t *testing.T) {
 	}
 }
 
+// serveConfig must fail when the PII detector URL is absent — the gate
+// cannot mask without a detector, and a server whose gate cannot mask
+// must not start.
+func TestServeConfigRequiresDetectorURL(t *testing.T) {
+	env := serveEnv()
+	delete(env, "KURA_PII_DETECTOR_URL")
+	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err == nil {
+		t.Error("serveConfig returned no error when KURA_PII_DETECTOR_URL was unset")
+	}
+}
+
 // With a complete environment, serveConfig produces a Config that New
 // accepts — proof the wiring is complete.
 func TestServeConfigWiresAcceptableConfig(t *testing.T) {
@@ -48,11 +60,14 @@ func TestServeConfigWiresAcceptableConfig(t *testing.T) {
 	if cfg.Addr != "127.0.0.1:8080" {
 		t.Errorf("Addr = %q, want 127.0.0.1:8080", cfg.Addr)
 	}
-	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil {
+	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil {
 		t.Error("serveConfig left a required enforcement collaborator nil")
 	}
 	if cfg.Trust.FirmDomain != "examplefirm.com" {
 		t.Errorf("Trust.FirmDomain = %q, want examplefirm.com", cfg.Trust.FirmDomain)
+	}
+	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
+		t.Fatalf("serveConfig with a complete environment: %v", err)
 	}
 }
 

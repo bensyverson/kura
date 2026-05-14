@@ -9,14 +9,32 @@ import (
 	"time"
 
 	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/manifest"
+	"github.com/bensyverson/kura/internal/pii"
 )
 
 // testConfig returns a complete, wired Config for the given bind address,
 // backed by in-memory fakes. It also returns the Authenticator so a test
-// can mint tokens the server will accept.
-func testConfig(addr string) (Config, *identity.Authenticator) {
+// can mint tokens the server will accept. The Gate is wired over the
+// same Authenticator, so a token the server accepts the gate accepts too.
+func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
+	t.Helper()
 	auth := identity.NewAuthenticator([]byte("test-signing-secret"))
+	m := &manifest.Manifest{
+		Version:  "1",
+		Entities: []manifest.Entity{{Name: "patient", Fields: []manifest.Field{{Name: "id", Type: manifest.FieldString}}}},
+	}
+	evaluator, err := cedar.NewEvaluator(cedar.DefaultPolicy(m))
+	if err != nil {
+		t.Fatalf("building evaluator: %v", err)
+	}
+	g, err := gate.New(auth, evaluator, gate.NewMapRoleResolver(), m, pii.NewScanner(pii.NewFakeDetector()), audit.NewRecorder(audit.NewMemStore()))
+	if err != nil {
+		t.Fatalf("gate.New: %v", err)
+	}
 	return Config{
 		Addr:     addr,
 		Logger:   discardLogger(),
@@ -25,13 +43,14 @@ func testConfig(addr string) (Config, *identity.Authenticator) {
 		Google:   &fakeGoogle{consentURL: "https://accounts.google.example/auth"},
 		Trust:    testTrust(),
 		TokenTTL: time.Hour,
+		Gate:     g,
 	}, auth
 }
 
 // kura serve must start, bind a real socket, serve its health endpoints,
 // and shut down gracefully when its context is cancelled.
 func TestServerServesHealthAndShutsDownGracefully(t *testing.T) {
-	cfg, _ := testConfig("127.0.0.1:0")
+	cfg, _ := testConfig(t, "127.0.0.1:0")
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -75,7 +94,7 @@ func TestServerServesHealthAndShutsDownGracefully(t *testing.T) {
 // New requires its enforcement collaborators — a server that cannot
 // resolve a token or record an audit event must not come into existence.
 func TestNewRequiresEnforcementDependencies(t *testing.T) {
-	cfg, _ := testConfig("127.0.0.1:0")
+	cfg, _ := testConfig(t, "127.0.0.1:0")
 	cfg.Auth = nil
 	if _, err := New(cfg); err == nil {
 		t.Error("New returned no error when Auth was nil")
@@ -85,7 +104,7 @@ func TestNewRequiresEnforcementDependencies(t *testing.T) {
 // An unauthenticated request to a data route must be rejected before any
 // business-logic handler runs.
 func TestUnauthenticatedDataRouteRejectedBeforeBusinessLogic(t *testing.T) {
-	cfg, _ := testConfig("127.0.0.1:0")
+	cfg, _ := testConfig(t, "127.0.0.1:0")
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -103,7 +122,7 @@ func TestUnauthenticatedDataRouteRejectedBeforeBusinessLogic(t *testing.T) {
 // A request carrying a valid token is allowed past the auth gate (the
 // skeleton has no data handlers yet, so it 404s rather than 401s).
 func TestValidTokenPassesAuthGate(t *testing.T) {
-	cfg, auth := testConfig("127.0.0.1:0")
+	cfg, auth := testConfig(t, "127.0.0.1:0")
 	srv, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

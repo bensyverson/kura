@@ -94,6 +94,18 @@ func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
+// withClientIP stamps the real client IP onto the request context, so
+// every audit event the gate writes while serving the request carries
+// it. It wraps the whole tree: the OAuth callback audits an
+// authentication too, and that event deserves the IP just as much as a
+// data access does.
+func withClientIP(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := audit.WithClientIP(r.Context(), clientIP(r))
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 // clientIP reports the IP to attribute a request to. Caddy terminates TLS
 // in front of the server (Phase 6) and forwards the real client IP in
 // X-Forwarded-For; that header wins when present, falling back to the

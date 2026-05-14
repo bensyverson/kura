@@ -37,6 +37,48 @@ func TestEventStructHasNoOpaqueFields(t *testing.T) {
 	}
 }
 
+// The real client IP of a request is request-scoped metadata: an adapter
+// stashes it on the context, and every event the recorder writes while
+// serving that request carries it. An event recorded without an IP on
+// the context (a CLI-local call, say) simply has an empty IP.
+func TestRecorderRecordsClientIPFromContext(t *testing.T) {
+	store := NewMemStore()
+	rec := NewRecorder(store)
+	actor := testActor()
+	res := Resource{Entity: "customer", ID: "cust-1"}
+
+	ctx := WithClientIP(context.Background(), "203.0.113.7")
+	if err := rec.RecordAuthentication(ctx, actor, OutcomeAllowed); err != nil {
+		t.Fatalf("RecordAuthentication: %v", err)
+	}
+	if err := rec.RecordAuthorization(ctx, actor, "read", res, OutcomeAllowed); err != nil {
+		t.Fatalf("RecordAuthorization: %v", err)
+	}
+	if err := rec.RecordAccess(ctx, actor, "read", res); err != nil {
+		t.Fatalf("RecordAccess: %v", err)
+	}
+	// A call with no IP on the context records an empty IP, not a panic.
+	if err := rec.RecordAccess(context.Background(), actor, "read", res); err != nil {
+		t.Fatalf("RecordAccess (no IP): %v", err)
+	}
+
+	events, err := store.Query(context.Background(), Filter{})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	for _, e := range events[:3] {
+		if e.IP != "203.0.113.7" {
+			t.Errorf("%s event IP = %q, want %q", e.Kind, e.IP, "203.0.113.7")
+		}
+	}
+	if events[3].IP != "" {
+		t.Errorf("event recorded without an IP on the context has IP = %q, want empty", events[3].IP)
+	}
+}
+
 // cBg: each decision kind emits a well-formed, structured event.
 func TestRecorderEmitsStructuredEvents(t *testing.T) {
 	store := NewMemStore()

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 )
 
@@ -29,9 +30,10 @@ const defaultShutdownTimeout = 10 * time.Second
 const defaultTokenTTL = 12 * time.Hour
 
 // ErrMissingDependency is returned by New when a required enforcement
-// collaborator is nil. A server that cannot resolve a token or record an
-// audit event must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, and a google authenticator")
+// collaborator is nil. A server that cannot resolve a token, record an
+// audit event, or run a request through the core gate must not come into
+// existence.
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, and the core gate")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -57,6 +59,10 @@ type Config struct {
 	Recorder *audit.Recorder
 	// Google performs the Google side of the OAuth flow. Required.
 	Google GoogleAuthenticator
+	// Gate is the core enforcement entrypoint. Every data route is a thin
+	// binding over Gate.Access — the server holds no other way to read a
+	// record. Required.
+	Gate *gate.Gate
 	// Trust maps a verified Workspace domain to a Kura principal type. A
 	// zero Trust trusts no domain — fail-closed, but useless.
 	Trust identity.DomainTrust
@@ -71,6 +77,11 @@ type Server struct {
 	oauth *oauthHandler
 	http  *http.Server
 
+	// dataRoutes is every handler mounted under /api/, keyed by pattern.
+	// registerData is the only thing that writes it, and it only writes
+	// *gatedHandler values — the architectural test asserts exactly that.
+	dataRoutes map[string]http.Handler
+
 	ready     chan struct{} // closed once the listener is bound
 	readyOnce sync.Once
 
@@ -83,7 +94,7 @@ type Server struct {
 // enforcement collaborator is nil. It does not bind a socket — Run does
 // that.
 func New(cfg Config) (*Server, error) {
-	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil {
+	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -100,7 +111,7 @@ func New(cfg Config) (*Server, error) {
 		oauth: newOAuthHandler(cfg.Google, cfg.Trust, cfg.Auth, cfg.Recorder, cfg.TokenTTL, cfg.Logger),
 		ready: make(chan struct{}),
 	}
-	s.http = &http.Server{Handler: s.Handler()}
+	s.http = &http.Server{}
 	return s, nil
 }
 
@@ -108,7 +119,9 @@ func New(cfg Config) (*Server, error) {
 // a load balancer must reach health without a credential, and the OAuth
 // endpoints are how a caller acquires one in the first place. Everything
 // under /api/ is wrapped in requireAuth, so no data route can be reached
-// before authentication. The whole tree is wrapped in requestLogger.
+// before authentication; each data route is itself a gatedHandler, so no
+// data response can be served without passing through the core gate. The
+// whole tree is wrapped in requestLogger and withClientIP.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -125,14 +138,19 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /oauth/login", s.oauth.login)
 	mux.HandleFunc("GET /oauth/callback", s.oauth.callback)
 
-	// Data routes. The skeleton declares the subtree and its auth gate;
-	// the actual endpoints land in later phases. Until then an
-	// authenticated request to an unknown /api path 404s — but an
-	// unauthenticated one is rejected here, before it ever reaches a
-	// handler.
-	mux.Handle("/api/", requireAuth(s.cfg.Auth, s.cfg.Recorder, s.cfg.Logger, http.NotFoundHandler()))
+	// Data routes. Each is a gatedHandler registered through
+	// registerData — there is no other path onto this subtree. An
+	// authenticated request to an unregistered /api path 404s; an
+	// unauthenticated one is rejected by requireAuth before it reaches
+	// any handler.
+	api := http.NewServeMux()
+	for pattern, h := range s.dataRoutes {
+		api.Handle(pattern, h)
+	}
+	api.Handle("/api/", http.NotFoundHandler())
+	mux.Handle("/api/", requireAuth(s.cfg.Auth, s.cfg.Recorder, s.cfg.Logger, api))
 
-	return requestLogger(s.cfg.Logger, mux)
+	return requestLogger(s.cfg.Logger, withClientIP(mux))
 }
 
 // Run binds the listener and serves until ctx is cancelled, then shuts
@@ -140,6 +158,11 @@ func (s *Server) Handler() http.Handler {
 // shutdown; a bind failure or an unclean shutdown is returned as an
 // error.
 func (s *Server) Run(ctx context.Context) error {
+	// Build the routing tree now, so any data routes registered after New
+	// are mounted. Handler is idempotent and the server has not served a
+	// request yet.
+	s.http.Handler = s.Handler()
+
 	ln, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
 		s.readyOnce.Do(func() { close(s.ready) })

@@ -54,6 +54,10 @@ type Event struct {
 	Actor    identity.Principal
 	Action   string
 	Resource Resource
+	// IP is the real client IP the request came from, as recorded by the
+	// adapter that served it (see WithClientIP). It is empty for events
+	// recorded outside a request — a CLI-local call, for instance.
+	IP string
 }
 
 // Filter selects events for a Query. A zero-valued field is "match any";

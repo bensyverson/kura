@@ -9,7 +9,11 @@ import (
 	"syscall"
 
 	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/manifest"
+	"github.com/bensyverson/kura/internal/pii"
 	"github.com/bensyverson/kura/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +43,8 @@ Configuration is read from the environment:
                              https://kura.client.example (required)
   KURA_FIRM_DOMAIN           the consulting firm's Workspace domain;
                              humans on it are Consultants (required)
+  KURA_PII_DETECTOR_URL      base URL of the self-hosted PII detection
+                             service (required)
   KURA_CLIENT_DOMAINS        comma-separated client Workspace domains;
                              humans on them are Users
   KURA_ADMIN_EMAILS          comma-separated client-domain emails granted
@@ -98,6 +104,10 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	if err != nil {
 		return server.Config{}, err
 	}
+	detectorURL, err := required("KURA_PII_DETECTOR_URL")
+	if err != nil {
+		return server.Config{}, err
+	}
 
 	google := server.NewGoogleAuthenticator(server.GoogleConfig{
 		ClientID:     clientID,
@@ -105,20 +115,47 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		RedirectURL:  strings.TrimRight(publicURL, "/") + "/oauth/callback",
 	})
 
+	auth := identity.NewAuthenticator([]byte(secret))
+	// MemStore is the v1 audit backing for kura serve: the DB-backed
+	// audit store is a later, separate build-plan task. Until it lands,
+	// the server audits to memory. The same recorder backs the gate, so
+	// every enforcement event lands in one log.
+	recorder := audit.NewRecorder(audit.NewMemStore())
+
+	g, err := buildGate(auth, recorder, detectorURL)
+	if err != nil {
+		return server.Config{}, err
+	}
+
 	return server.Config{
-		Addr: addr,
-		Auth: identity.NewAuthenticator([]byte(secret)),
-		// MemStore is the v1 audit backing for kura serve: the
-		// DB-backed audit store is a later, separate build-plan task.
-		// Until it lands, the server audits to memory.
-		Recorder: audit.NewRecorder(audit.NewMemStore()),
+		Addr:     addr,
+		Auth:     auth,
+		Recorder: recorder,
 		Google:   google,
+		Gate:     g,
 		Trust: identity.DomainTrust{
 			FirmDomain:    firmDomain,
 			ClientDomains: splitList(getenv("KURA_CLIENT_DOMAINS")),
 			AdminEmails:   splitList(getenv("KURA_ADMIN_EMAILS")),
 		},
 	}, nil
+}
+
+// buildGate assembles the core enforcement gate the server delegates
+// every data read to. The manifest and Cedar policy are loaded from the
+// deployment repo at startup — a later build-plan task; until that wiring
+// lands the gate runs on an empty manifest, which is consistent with the
+// server having no data routes registered yet. The PII detector and the
+// authenticator are real, and the recorder is shared with the server so
+// authentication and access land in one audit log.
+func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, detectorURL string) (*gate.Gate, error) {
+	m := &manifest.Manifest{Version: "1"}
+	evaluator, err := cedar.NewEvaluator(cedar.DefaultPolicy(m))
+	if err != nil {
+		return nil, fmt.Errorf("serve: building authorization evaluator: %w", err)
+	}
+	scanner := pii.NewScanner(pii.NewServiceDetector(detectorURL))
+	return gate.New(auth, evaluator, gate.NewMapRoleResolver(), m, scanner, recorder)
 }
 
 // splitList parses a comma-separated environment variable into a
