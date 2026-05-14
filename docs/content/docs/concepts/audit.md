@@ -54,6 +54,21 @@ and the dashboard's audit viewer consume:
   inclusive-`Since` / exclusive-`Until` time range.
 - **Subscribe** — a live channel of events appended after the call, for `tail`.
 
+### Over the HTTP API
+
+The `kura serve` HTTP API projects both primitives as read-only endpoints:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/audit` | The events matching the `actor`, `entity`, `action`, `since`, and `until` query parameters. Time bounds are RFC 3339. |
+| `GET /api/audit/stream` | A live `application/x-ndjson` feed — one event per line — of events appended after the request opens. |
+
+**Reading the audit log is itself an audited event.** Both endpoints run through the
+core gate as `review` operations, so a query or a stream is authorized against the
+caller's roles — the `auditor` and `admin` roles may read, no one else — and the
+access is recorded on the `audit_log` resource. There is no write endpoint: the log
+is append-only, and only the `Recorder` on a gate path can append to it.
+
 ## Its own store, its own retention
 
 The audit log is itself sensitive — but at a different category than the data it

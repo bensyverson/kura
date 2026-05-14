@@ -75,6 +75,16 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Flush passes a flush through to the underlying ResponseWriter when it
+// supports one, so the logging wrapper stays transparent to a streaming
+// handler — the audit stream pushes each JSON line to the client through
+// this wrapper, and a swallowed Flush would stall it indefinitely.
+func (r *statusRecorder) Flush() {
+	if f, ok := r.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 // requestLogger emits one structured line per request — method, path,
 // status, duration, and the client IP — to logger. Logs go to the
 // injected logger (stderr by default): request telemetry is operational

@@ -32,7 +32,9 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 	if err != nil {
 		t.Fatalf("building evaluator: %v", err)
 	}
-	g, err := gate.New(auth, evaluator, gate.NewMapRoleResolver(), m, pii.NewScanner(pii.NewFakeDetector()), audit.NewRecorder(audit.NewMemStore()))
+	store := audit.NewMemStore()
+	recorder := audit.NewRecorder(store)
+	g, err := gate.New(auth, evaluator, gate.NewMapRoleResolver(), m, pii.NewScanner(pii.NewFakeDetector()), recorder)
 	if err != nil {
 		t.Fatalf("gate.New: %v", err)
 	}
@@ -40,7 +42,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Addr:     addr,
 		Logger:   discardLogger(),
 		Auth:     auth,
-		Recorder: audit.NewRecorder(audit.NewMemStore()),
+		Recorder: recorder,
 		Google:   &fakeGoogle{consentURL: "https://accounts.google.example/auth"},
 		Trust:    testTrust(),
 		TokenTTL: time.Hour,
@@ -48,6 +50,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Records:  data.NewMemStore(),
 		Users:    data.NewMemUserStore(),
 		IdP:      identity.NewFakeIdPDirectory(),
+		Audit:    store,
 	}, auth
 }
 

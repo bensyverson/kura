@@ -34,7 +34,7 @@ const defaultTokenTTL = 12 * time.Hour
 // collaborator is nil. A server that cannot resolve a token, record an
 // audit event, run a request through the core gate, read a record, or
 // manage the authorized-user list must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, and an IdP directory")
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, and an audit store")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -77,6 +77,12 @@ type Config struct {
 	// endpoints can surface a mismatch — a suspended account still
 	// holding a role. Required.
 	IdP identity.IdPDirectory
+	// Audit is the read seam over the audit subsystem — the same store the
+	// Recorder (and the Gate's recorder) write to. The audit query and
+	// stream endpoints read through it. Required: wiring it to a store
+	// other than the one being written to would serve a stale or empty
+	// log, so the deployment passes one store to all three. Required.
+	Audit audit.Store
 	// Trust maps a verified Workspace domain to a Kura principal type. A
 	// zero Trust trusts no domain — fail-closed, but useless.
 	Trust identity.DomainTrust
@@ -113,7 +119,8 @@ type Server struct {
 // that.
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
-		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil {
+		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil ||
+		cfg.Audit == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -133,6 +140,7 @@ func New(cfg Config) (*Server, error) {
 	s.http = &http.Server{}
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
+	s.registerAuditRoutes()
 	return s, nil
 }
 

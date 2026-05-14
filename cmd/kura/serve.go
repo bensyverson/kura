@@ -119,9 +119,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	auth := identity.NewAuthenticator([]byte(secret))
 	// MemStore is the v1 audit backing for kura serve: the DB-backed
 	// audit store is a later, separate build-plan task. Until it lands,
-	// the server audits to memory. The same recorder backs the gate, so
-	// every enforcement event lands in one log.
-	recorder := audit.NewRecorder(audit.NewMemStore())
+	// the server audits to memory. The same store backs the recorder (so
+	// the gate writes to it) and is the server's audit read seam (so the
+	// /api/audit endpoints read the same log) — one store, no drift.
+	auditStore := audit.NewMemStore()
+	recorder := audit.NewRecorder(auditStore)
 
 	// MemUserStore is the v1 backing for the authorized-user list. The
 	// Postgres-backed UserStore is its own build-plan task; until it
@@ -139,6 +141,7 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		Addr:     addr,
 		Auth:     auth,
 		Recorder: recorder,
+		Audit:    auditStore,
 		Google:   google,
 		Gate:     g,
 		// MemStore is the v1 record-store backing for kura serve. The
