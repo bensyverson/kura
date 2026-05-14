@@ -35,9 +35,10 @@ JSON API and the OAuth callback, nothing more.
   through `registerData`, which supplies a *binding*: a function that
   describes the gate request and the underlying read, and is handed no
   `ResponseWriter` of its own. The binding cannot return a response that
-  skipped the gate, because it never gets to write a response at all. An
-  architectural test asserts that every route under `/api/` is a
-  `gatedHandler`; a route added any other way fails it.
+  skipped the gate, because it never gets to write a response at all. The
+  data-route map is typed so that *only* a gated handler can be stored in
+  it — a raw handler does not satisfy the `gatedRoute` interface — and an
+  architectural test asserts the invariant a second time.
 - **Structured request logging** to stderr — one line per request with
   method, path, status, duration, and client IP. Request telemetry is
   operational output, never mixed into a response body.
@@ -48,6 +49,39 @@ JSON API and the OAuth callback, nothing more.
   IP the request actually came from.
 - **Graceful shutdown.** `SIGINT` / `SIGTERM` drains in-flight requests
   within a bounded timeout, then exits cleanly.
+
+## Data endpoints: generated from the manifest
+
+The data routes are not hand-written per entity — they are **generated
+from the [schema manifest](schema-manifest)**. For every entity the
+manifest declares, the server registers one route pair:
+
+| Route | Verb | Through the gate |
+| --- | --- | --- |
+| `GET /api/{entity}/{id}` | get one record | `Gate.Access` (the `read` action) |
+| `GET /api/{entity}` | list a page of records | `Gate.List` (the `list` action) |
+
+A client adds an entity to its manifest and the API grows the matching
+routes with no per-entity code. With an empty manifest no data routes
+exist at all — exactly right for a server that has no schema yet.
+
+- **Every response is masked** by the gate, per the requesting
+  principal's policy. The server never sees unmasked data: the binding
+  describes the read, the gate performs it and redacts the result. A get
+  for a record that does not exist is a `404`; a denied request is a
+  `403`.
+- **List endpoints are bounded by default.** `GET /api/{entity}` accepts
+  optional `limit` and `offset` query parameters. The gate clamps the
+  page — a missing limit becomes the **default page size of 50**, and a
+  limit above the **ceiling of 200** is capped — so a list endpoint can
+  never dump an unbounded result set. The response body carries the
+  records alongside the effective `limit` and `offset`, so a client can
+  page without guessing. A malformed pagination parameter is a `400`.
+- **The records come from a `RecordStore`** — the storage seam in the
+  `data` package. The bindings read through it; it knows nothing about
+  authorization or masking. Today that is an in-memory store; the
+  Postgres-backed implementation over the `kura.records` tables is a
+  separate build-plan task and slots in behind the same interface.
 
 ## Sign-in: the loopback OAuth handoff
 
@@ -81,8 +115,8 @@ rotating keys is not something to hand-roll on a security boundary.
 ## Conventions
 
 - **Paths over queries.** A resource is `/api/people/89`, not
-  `/api/people?id=89`. Query parameters are reserved for search, sort, and
-  filter.
+  `/api/people?id=89`. Query parameters are reserved for pagination
+  (`limit`, `offset`), search, sort, and filter.
 - **TLS terminates in front.** Caddy terminates TLS and proxies to the
   server on loopback (`kura serve` defaults to binding `127.0.0.1:8080`),
   so the server itself never needs a public-facing socket. It trusts the

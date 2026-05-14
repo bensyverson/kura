@@ -11,8 +11,29 @@ authenticate → authorize → access → mask → audit
 ```
 
 The HTTP API, the CLI's `--local` path, the local dashboard, and the MCP
-server all go through `Gate.Access` and nothing else. None of them may
+server all go through the gate and nothing else. None of them may
 reconstruct any of these steps themselves — that is the whole point.
+
+## Two verbs: `Access` and `List`
+
+The gate exposes exactly two entrypoints, and they are the same welded
+chain in two shapes:
+
+- **`Access`** reads one record. The authorization step asks the `read`
+  question; the `Fetcher` returns one record's fields.
+- **`List`** reads a bounded page of an entity's records. The
+  authorization step asks the `list` question; the `ListFetcher` returns
+  a page; every record in the page is masked; and the whole page is **one
+  audit event** — a list happened, on the entity, touching no single
+  record id.
+
+`List` is **bounded by construction**. A request with no limit gets the
+default page size; one asking for more than the ceiling is clamped to it.
+The gate clamps the page *before* the fetch runs, so an adapter cannot
+dump an unbounded result set no matter what it asks for. The effective
+limit and offset come back in the result, so a caller can page without
+guessing what bounds it got. The default and ceiling page sizes are
+`DefaultPageSize` and `MaxPageSize` in the `gate` package.
 
 ## The chain
 
@@ -20,23 +41,24 @@ reconstruct any of these steps themselves — that is the whole point.
 | --- | --- |
 | **authenticate** | The request's token is resolved to a principal. A bad token is recorded as a failed authentication and the request stops. |
 | **authorize** | Cedar decides the request against the principal's roles and the **PII categories the manifest declares** for the entity — categories, never column names. A denied request is recorded and stops here. |
-| **access** | Only now is the caller-supplied `Fetcher` invoked to read the data. |
-| **mask** | The data is re-scanned for PII (catching detector drift since ingestion) and every span whose category the authorization decision did not make visible is redacted. |
-| **audit** | The access is recorded. |
+| **access** | Only now is the caller-supplied `Fetcher` (or `ListFetcher`) invoked to read the data. For a list, the gate has already clamped the page bounds. |
+| **mask** | The data is re-scanned for PII (catching detector drift since ingestion) and every span whose category the authorization decision did not make visible is redacted. A list masks every record in the page. |
+| **audit** | The access is recorded — once per `Access`, and once per `List` page. |
 
 ## Welded shut by construction, not convention
 
 The criterion for the gate is that **skipping a step is impossible by
 construction**. Four properties enforce that:
 
-- **One verb.** `Gate` exposes only `Access`. There is no public method that
-  performs a subset — no standalone "authorize" or "mask" an adapter could
-  call instead.
+- **Two verbs, no subsets.** `Gate` exposes only `Access` and `List`.
+  There is no public method that performs a subset — no standalone
+  "authorize" or "mask" an adapter could call instead.
 
 - **The Fetcher is not an escape hatch.** The data read is caller-supplied,
   but the gate owns *when* it runs (only after authorization passes) and
   *what happens to its output* (masked and audited before return). A denied
-  request never reaches the Fetcher.
+  request never reaches the Fetcher. The same holds for a `List`'s
+  `ListFetcher` — and the gate clamps its page bounds besides.
 
 - **Masking is identical for every caller** because it happens here. The
   redaction logic is not reachable or overridable by an adapter, so the API,

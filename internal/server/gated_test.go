@@ -122,40 +122,30 @@ func TestGatedRouteEmitsAuditEvent(t *testing.T) {
 	}
 }
 
-// RLg: the architectural guard — every route mounted under /api/ must be
-// a gatedHandler. A route that bypasses the gate fails this test.
+// RLg: the architectural guard — every route mounted under /api/ goes
+// through the core gate. A route that bypasses the gate cannot even be
+// registered: dataRoutes is a map of gatedRoute, and a raw handler does
+// not satisfy gatedRoute.
 func TestEveryDataRouteIsGated(t *testing.T) {
-	g, _, auth, _ := gateFixture(t)
-	cfg, _ := testConfig(t, "127.0.0.1:0")
-	cfg.Auth = auth
-	cfg.Gate = g
-	srv, err := New(cfg)
-	if err != nil {
-		t.Fatalf("New: %v", err)
+	srv, _, _ := entitiesServer(t)
+	if len(srv.dataRoutes) == 0 {
+		t.Fatal("no data routes registered to check")
 	}
-	srv.registerData("GET /api/patients/{id}", patientBinding)
-
-	// The real server's data routes are all gated.
 	for pattern, h := range srv.dataRoutes {
-		if _, ok := h.(*gatedHandler); !ok {
-			t.Errorf("data route %q is %T, not a *gatedHandler — it can serve a response that bypassed the gate", pattern, h)
+		switch h.(type) {
+		case *gatedHandler, *gatedListHandler:
+			// ok — a thin wrapper that delegates to the gate
+		default:
+			t.Errorf("data route %q is %T, not a gated handler — it could serve a response that bypassed the gate", pattern, h)
 		}
 	}
 
-	// The guard has teeth: a route that bypasses the gate is caught. If
-	// this assertion ever stops failing, the guard above is meaningless.
-	bypass := map[string]http.Handler{
-		"GET /api/leak": http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Write([]byte(`{"full_name":"Jane Doe"}`))
-		}),
-	}
-	caught := false
-	for _, h := range bypass {
-		if _, ok := h.(*gatedHandler); !ok {
-			caught = true
-		}
-	}
-	if !caught {
-		t.Error("the architectural guard did not catch a route that bypasses the gate")
+	// The guard has teeth: a raw http.Handler does not satisfy
+	// gatedRoute, so it cannot be stored as a data route at all. If this
+	// ever stops holding, the map's value type has been loosened and the
+	// compile-time guarantee is gone.
+	var raw http.Handler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	if _, ok := raw.(gatedRoute); ok {
+		t.Error("a raw http.Handler satisfied gatedRoute — the gate boundary is not closed")
 	}
 }

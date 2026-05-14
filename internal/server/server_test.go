@@ -10,6 +10,7 @@ import (
 
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/manifest"
@@ -44,6 +45,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Trust:    testTrust(),
 		TokenTTL: time.Hour,
 		Gate:     g,
+		Records:  data.NewMemStore(),
 	}, auth
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/manifest"
@@ -133,6 +134,12 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		Recorder: recorder,
 		Google:   google,
 		Gate:     g,
+		// MemStore is the v1 record-store backing for kura serve. The
+		// Postgres-backed RecordStore over kura.records is its own
+		// build-plan task; until it lands the server reads from memory.
+		// With the empty startup manifest no data routes are generated,
+		// so nothing reads it yet anyway.
+		Records: data.NewMemStore(),
 		Trust: identity.DomainTrust{
 			FirmDomain:    firmDomain,
 			ClientDomains: splitList(getenv("KURA_CLIENT_DOMAINS")),

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 )
@@ -31,9 +32,9 @@ const defaultTokenTTL = 12 * time.Hour
 
 // ErrMissingDependency is returned by New when a required enforcement
 // collaborator is nil. A server that cannot resolve a token, record an
-// audit event, or run a request through the core gate must not come into
-// existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, and the core gate")
+// audit event, run a request through the core gate, or read a record
+// must not come into existence.
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, and a record store")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -60,9 +61,13 @@ type Config struct {
 	// Google performs the Google side of the OAuth flow. Required.
 	Google GoogleAuthenticator
 	// Gate is the core enforcement entrypoint. Every data route is a thin
-	// binding over Gate.Access — the server holds no other way to read a
-	// record. Required.
+	// binding over Gate.Access or Gate.List — the server holds no other
+	// way to read a record. Required.
 	Gate *gate.Gate
+	// Records is the storage seam the data-route bindings read through.
+	// The gate owns enforcement; Records just supplies the raw bytes.
+	// Required.
+	Records data.RecordStore
 	// Trust maps a verified Workspace domain to a Kura principal type. A
 	// zero Trust trusts no domain — fail-closed, but useless.
 	Trust identity.DomainTrust
@@ -78,9 +83,12 @@ type Server struct {
 	http  *http.Server
 
 	// dataRoutes is every handler mounted under /api/, keyed by pattern.
-	// registerData is the only thing that writes it, and it only writes
-	// *gatedHandler values — the architectural test asserts exactly that.
-	dataRoutes map[string]http.Handler
+	// Its value type is gatedRoute, not http.Handler: only a gated
+	// handler can be stored as a data route, so a route that bypasses
+	// the gate cannot be registered. registerData and registerListData
+	// are the only writers; the architectural test asserts the invariant
+	// a second time, with teeth.
+	dataRoutes map[string]gatedRoute
 
 	ready     chan struct{} // closed once the listener is bound
 	readyOnce sync.Once
@@ -94,7 +102,7 @@ type Server struct {
 // enforcement collaborator is nil. It does not bind a socket — Run does
 // that.
 func New(cfg Config) (*Server, error) {
-	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil {
+	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil || cfg.Records == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -112,6 +120,7 @@ func New(cfg Config) (*Server, error) {
 		ready: make(chan struct{}),
 	}
 	s.http = &http.Server{}
+	s.registerEntityRoutes()
 	return s, nil
 }
 

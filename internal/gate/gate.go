@@ -102,48 +102,15 @@ func New(
 // closed, returning an error and no data.
 func (g *Gate) Access(ctx context.Context, req AccessRequest, fetch Fetcher) (AccessResult, error) {
 	// 1. Authenticate.
-	principal, err := g.auth.Resolve(req.Token)
+	principal, err := g.authenticate(ctx, req.Token)
 	if err != nil {
-		if recErr := g.recorder.RecordAuthentication(ctx, identity.Principal{}, audit.OutcomeDenied); recErr != nil {
-			return AccessResult{}, fmt.Errorf("gate: recording failed authentication: %w", recErr)
-		}
-		return AccessResult{}, fmt.Errorf("gate: authentication: %w", err)
-	}
-	if err := g.recorder.RecordAuthentication(ctx, principal, audit.OutcomeAllowed); err != nil {
-		return AccessResult{}, fmt.Errorf("gate: recording authentication: %w", err)
+		return AccessResult{}, err
 	}
 
-	// 2. Authorize. The PII categories the evaluator reasons about are
-	// the ones the manifest declares for the entity — categories, never
-	// column names, and resolved without touching the data.
-	entity, ok := g.manifest.Entity(req.Entity)
-	if !ok {
-		return AccessResult{}, fmt.Errorf("%w: %q", ErrUnknownEntity, req.Entity)
-	}
-	roles, err := g.roles.Roles(ctx, principal)
+	// 2. Authorize.
+	decision, err := g.authorize(ctx, principal, req.Action, req.Entity, req.ResourceID)
 	if err != nil {
-		return AccessResult{}, fmt.Errorf("gate: resolving roles: %w", err)
-	}
-	decision, err := g.evaluator.Decide(cedar.Request{
-		Principal:   principal,
-		Roles:       roles,
-		Action:      req.Action,
-		Entity:      req.Entity,
-		ResourceID:  req.ResourceID,
-		DetectedPII: declaredCategories(entity),
-	})
-	if err != nil {
-		return AccessResult{}, fmt.Errorf("gate: authorization: %w", err)
-	}
-	resource := audit.Resource{Entity: req.Entity, ID: req.ResourceID}
-	if !decision.Allowed {
-		if err := g.recorder.RecordAuthorization(ctx, principal, string(req.Action), resource, audit.OutcomeDenied); err != nil {
-			return AccessResult{}, fmt.Errorf("gate: recording denied authorization: %w", err)
-		}
-		return AccessResult{}, ErrDenied
-	}
-	if err := g.recorder.RecordAuthorization(ctx, principal, string(req.Action), resource, audit.OutcomeAllowed); err != nil {
-		return AccessResult{}, fmt.Errorf("gate: recording authorization: %w", err)
+		return AccessResult{}, err
 	}
 
 	// 3. Access.
@@ -152,23 +119,96 @@ func (g *Gate) Access(ctx context.Context, req AccessRequest, fetch Fetcher) (Ac
 		return AccessResult{}, fmt.Errorf("gate: data access: %w", err)
 	}
 
-	// 4. Mask. The data is re-scanned at access time — catching detector
-	// drift since ingestion — and every span whose category the decision
-	// did not make visible is redacted. A category detected here that
-	// the decision never classified is, by definition, not visible.
-	spansByField, err := g.scanner.ScanRecord(ctx, fields)
+	// 4. Mask.
+	masked, err := g.mask(ctx, fields, decision)
 	if err != nil {
-		return AccessResult{}, fmt.Errorf("gate: scanning for masking: %w", err)
+		return AccessResult{}, err
 	}
-	masked := maskFields(spansByField, fields, categorySet(decision.VisibleCategories))
 
 	// 5. Audit the access.
-	if err := g.recorder.RecordAccess(ctx, principal, string(req.Action), resource); err != nil {
+	if err := g.recorder.RecordAccess(ctx, principal, string(req.Action), audit.Resource{Entity: req.Entity, ID: req.ResourceID}); err != nil {
 		return AccessResult{}, fmt.Errorf("gate: recording access: %w", err)
 	}
 
 	return AccessResult{Principal: principal, Fields: masked}, nil
 }
+
+// authenticate resolves token to a principal and records the
+// authentication. A failed resolution is itself recorded — a rejected
+// credential is an audit-worthy event — and then returned as an error.
+// A failure to record fails closed.
+func (g *Gate) authenticate(ctx context.Context, token string) (identity.Principal, error) {
+	principal, err := g.auth.Resolve(token)
+	if err != nil {
+		if recErr := g.recorder.RecordAuthentication(ctx, identity.Principal{}, audit.OutcomeDenied); recErr != nil {
+			return identity.Principal{}, fmt.Errorf("gate: recording failed authentication: %w", recErr)
+		}
+		return identity.Principal{}, fmt.Errorf("gate: authentication: %w", err)
+	}
+	if err := g.recorder.RecordAuthentication(ctx, principal, audit.OutcomeAllowed); err != nil {
+		return identity.Principal{}, fmt.Errorf("gate: recording authentication: %w", err)
+	}
+	return principal, nil
+}
+
+// authorize evaluates principal's request and records the decision. The
+// PII categories the evaluator reasons about are the ones the manifest
+// declares for the entity — categories, never column names, resolved
+// without touching the data. A denied decision is recorded and returned
+// as ErrDenied; an entity the manifest does not declare is
+// ErrUnknownEntity. A failure to record fails closed.
+func (g *Gate) authorize(ctx context.Context, principal identity.Principal, action cedar.Action, entityName, resourceID string) (cedar.Decision, error) {
+	entity, ok := g.manifest.Entity(entityName)
+	if !ok {
+		return cedar.Decision{}, fmt.Errorf("%w: %q", ErrUnknownEntity, entityName)
+	}
+	roles, err := g.roles.Roles(ctx, principal)
+	if err != nil {
+		return cedar.Decision{}, fmt.Errorf("gate: resolving roles: %w", err)
+	}
+	decision, err := g.evaluator.Decide(cedar.Request{
+		Principal:   principal,
+		Roles:       roles,
+		Action:      action,
+		Entity:      entityName,
+		ResourceID:  resourceID,
+		DetectedPII: declaredCategories(entity),
+	})
+	if err != nil {
+		return cedar.Decision{}, fmt.Errorf("gate: authorization: %w", err)
+	}
+	resource := audit.Resource{Entity: entityName, ID: resourceID}
+	if !decision.Allowed {
+		if err := g.recorder.RecordAuthorization(ctx, principal, string(action), resource, audit.OutcomeDenied); err != nil {
+			return cedar.Decision{}, fmt.Errorf("gate: recording denied authorization: %w", err)
+		}
+		return cedar.Decision{}, ErrDenied
+	}
+	if err := g.recorder.RecordAuthorization(ctx, principal, string(action), resource, audit.OutcomeAllowed); err != nil {
+		return cedar.Decision{}, fmt.Errorf("gate: recording authorization: %w", err)
+	}
+	return decision, nil
+}
+
+// mask re-scans fields at access time — catching detector drift since
+// ingestion — and redacts every span whose category the decision did not
+// make visible. A category detected here that the decision never
+// classified is, by definition, not visible.
+func (g *Gate) mask(ctx context.Context, fields map[string]string, decision cedar.Decision) (map[string]string, error) {
+	spansByField, err := g.scanner.ScanRecord(ctx, fields)
+	if err != nil {
+		return nil, fmt.Errorf("gate: scanning for masking: %w", err)
+	}
+	return maskFields(spansByField, fields, categorySet(decision.VisibleCategories)), nil
+}
+
+// Manifest returns the schema manifest the gate enforces against. An
+// adapter reads it to learn which entities exist — the HTTP API
+// generates one route pair per entity from it — but the manifest is the
+// gate's, not the adapter's: it is the same one every authorization
+// decision reasons about, so adapter routing and gate enforcement can
+// never drift onto different schemas.
+func (g *Gate) Manifest() *manifest.Manifest { return g.manifest }
 
 // declaredCategories returns the PII categories the manifest declares for
 // the entity's fields, in canonical category order.
