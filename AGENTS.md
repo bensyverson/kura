@@ -12,6 +12,13 @@ When you need additional context, consult the docs:
 - [project/](project/) - Historical design documents and past project plans
 - [docs/](docs/content/docs/) - Project documentation in Markdown format (Hextra)
 
+## Architecture: adapter-over-core
+
+The product is `internal/` — the core enforcement library (Cedar authorization, audit logging, PII detection/masking, field-level encryption, data access). The CLI (`cmd/kura/`), the HTTP API (`kura serve`), the local dashboard (`kura dashboard`), and the MCP server (`kura mcp`) are all thin adapters over it.
+
+- Logic belongs in `internal/`. An adapter file that holds a policy decision, an audit write, or a masking rule is a bug — adapters are wiring plus presentation only.
+- See [project/2026-05-14-architecture.md](project/2026-05-14-architecture.md) for the full rationale, and [project/2026-05-14-cli-design-guidelines.md](project/2026-05-14-cli-design-guidelines.md) as the canonical CLI reference.
+
 ## CLI conventions
 
 - **Open with `job status`.** At session start, `job status` (no arg) is both the identity check and the landscape briefing.
@@ -23,7 +30,7 @@ When you need additional context, consult the docs:
 - Avoid dependencies unless the required functionality would be unreasonable to re-implement. If you MUST bring in a dependency, get the user's permission first.
 - IMPORTANT: In this project we ALWAYS follow strict "red/green" TDD; write tests for all example cases we need to handle and any new methods we're implementing, verify that they fail, and *then* proceed to implement your code changes. If you must alter a previous test to get it to pass, explain exactly WHY to the user and get their consent.
 - Before fixing a bug, try to create a regression test to catch it in the future.
-- DO NOT begin a new chat by doing an extensive exploration of the entire codebase. That is wasteful, as this is a large codebase. Instead, read the README and use an Explore agent to read the DocC documentation if you want to get the lay of the land. Of course, once you have a specific need, you can explore as much of the code as you require.
+- DO NOT begin a new chat by doing an extensive exploration of the entire codebase. That is wasteful, as this is a large codebase. Instead, read the README and use an Explore agent to read the `docs/` documentation if you want to get the lay of the land. Of course, once you have a specific need, you can explore as much of the code as you require.
 - To create and manage plans and task lists, always use the `job` command.
 
 ## Understand the "why"

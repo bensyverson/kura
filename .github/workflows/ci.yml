@@ -1,0 +1,38 @@
+name: CI
+
+# Per-commit pipeline: build, vet, fmt-check, test. Kept fast — the
+# expensive real-DigitalOcean e2e is a separate per-release pipeline.
+# This grows as later phases land (containerized Postgres, static IaC
+# policy checks, terraform plan snapshots).
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt check
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test ./...
