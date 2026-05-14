@@ -1,0 +1,31 @@
+{
+  "version": "1",
+  "entities": [
+    {
+      "name": "customer",
+      "description": "A person or organization whose data the client holds.",
+      "fields": [
+        { "name": "id", "type": "string", "description": "Stable identifier." },
+        { "name": "full_name", "type": "string", "description": "Customer's name.", "pii": "private_person" },
+        { "name": "email", "type": "string", "description": "Primary contact email.", "pii": "private_email" },
+        { "name": "ssn", "type": "string", "description": "Social security number.", "pii": "account_number" },
+        { "name": "notes", "type": "text", "description": "Free-text case notes; PII-scanned at ingestion." }
+      ],
+      "relationships": [
+        { "name": "orders", "kind": "many", "target": "order", "description": "Orders placed by this customer." }
+      ]
+    },
+    {
+      "name": "order",
+      "description": "A single purchase.",
+      "fields": [
+        { "name": "id", "type": "string", "description": "Stable identifier." },
+        { "name": "placed_at", "type": "timestamp", "description": "When the order was placed." },
+        { "name": "total_cents", "type": "integer", "description": "Order total, in cents." }
+      ],
+      "relationships": [
+        { "name": "customer", "kind": "one", "target": "customer", "description": "The customer who placed this order." }
+      ]
+    }
+  ]
+}
