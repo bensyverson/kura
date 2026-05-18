@@ -2,13 +2,13 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 
+	"github.com/bensyverson/kura/internal/clio"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/spf13/cobra"
 )
@@ -56,11 +56,11 @@ same env the server reads.`,
 func runWhoamiLocal(cmd *cobra.Command) error {
 	as, _ := cmd.Flags().GetString("as")
 	if as == "" {
-		return errors.New("whoami: --local requires --as <email> (the principal to resolve)")
+		return clio.UsageError("whoami", "--local requires --as <email> (the principal to resolve)")
 	}
 	parts := strings.SplitN(as, "@", 2)
 	if len(parts) != 2 || parts[1] == "" {
-		return fmt.Errorf("whoami: --as must be an email (got %q)", as)
+		return clio.UsageError("whoami", "--as must be an email (got %q)", as)
 	}
 	trust := identity.TenantTrust{
 		FirmTenant:    os.Getenv("KURA_FIRM_DOMAIN"),
@@ -68,11 +68,14 @@ func runWhoamiLocal(cmd *cobra.Command) error {
 		AdminEmails:   splitList(os.Getenv("KURA_ADMIN_EMAILS")),
 	}
 	if trust.FirmTenant == "" {
-		return errors.New("whoami: --local requires KURA_FIRM_DOMAIN set on this box (the firm's IdP tenant — the same value `kura serve` reads)")
+		return clio.UsageError("whoami", "--local requires KURA_FIRM_DOMAIN set on this box (the firm's IdP tenant — the same value `kura serve` reads)")
 	}
 	principal, err := trust.Principal(as, parts[1])
 	if err != nil {
-		return fmt.Errorf("whoami: %w", err)
+		// TenantTrust rejects a principal it cannot place — an unknown
+		// tenant or an unknown identity. From the CLI's perspective
+		// that's an auth failure: the caller is not who they say.
+		return clio.AuthError("whoami", "%w", err)
 	}
 	return renderPrincipal(cmd, principal)
 }
@@ -83,7 +86,7 @@ func runWhoamiLocal(cmd *cobra.Command) error {
 // principal requireAuth resolved for the token — and returns it. The
 // CLI renders the response unchanged.
 func runWhoamiRemote(cmd *cobra.Command) error {
-	server, err := resolveServerFromFlags(cmd)
+	server, err := resolveServerFromFlags(cmd, "whoami")
 	if err != nil {
 		return err
 	}
@@ -98,31 +101,55 @@ func runWhoamiRemote(cmd *cobra.Command) error {
 
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, strings.TrimRight(server, "/")+"/api/whoami", nil)
 	if err != nil {
-		return fmt.Errorf("whoami: building request: %w", err)
+		return clio.InternalError("whoami", "building request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("whoami: %w", err)
+		// Network-level failure: the server may or may not be there;
+		// a retry might succeed. The agent should treat this as
+		// transient, not as auth or input.
+		return clio.TransientError("whoami", "%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("whoami: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return classifyHTTPStatus("whoami", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	var principal identity.Principal
 	if err := json.NewDecoder(resp.Body).Decode(&principal); err != nil {
-		return fmt.Errorf("whoami: decoding server response: %w", err)
+		return clio.InternalError("whoami", "decoding server response: %w", err)
 	}
 	return renderPrincipal(cmd, principal)
 }
 
+// classifyHTTPStatus maps a non-2xx HTTP response into the taxonomy.
+// 401/403 → Auth, 404 → NotFound, 409/412 → Conflict, 5xx → Transient,
+// everything else → Internal. The body is folded in so the caller sees
+// the server's own message (already trimmed and length-bounded by the
+// caller).
+func classifyHTTPStatus(verb string, status int, body string) error {
+	switch {
+	case status == http.StatusUnauthorized, status == http.StatusForbidden:
+		return clio.AuthError(verb, "server returned %d: %s", status, body)
+	case status == http.StatusNotFound:
+		return clio.NotFoundError(verb, "server returned %d: %s", status, body)
+	case status == http.StatusConflict, status == http.StatusPreconditionFailed:
+		return clio.ConflictError(verb, "server returned %d: %s", status, body)
+	case status >= 500:
+		return clio.TransientError(verb, "server returned %d: %s", status, body)
+	default:
+		return clio.InternalError(verb, "server returned %d: %s", status, body)
+	}
+}
+
 // resolveServerFromFlags wires the cobra flag layer into resolveServer:
 // it loads the profiles file (missing-file-is-empty) and the cached
-// credential, then applies the precedence rules.
-func resolveServerFromFlags(cmd *cobra.Command) (string, error) {
+// credential, then applies the precedence rules. verb is the calling
+// command's name, used to prefix any taxonomy errors that bubble up.
+func resolveServerFromFlags(cmd *cobra.Command, verb string) (string, error) {
 	serverFlag, _ := cmd.Flags().GetString("server")
 	clientFlag, _ := cmd.Flags().GetString("client")
 
@@ -140,7 +167,7 @@ func resolveServerFromFlags(cmd *cobra.Command) (string, error) {
 	}
 	cachedServer, _, _ := cache.load() // a missing cache is fine here; resolveServer handles empty
 
-	return resolveServer(serverInputs{
+	return resolveServer(verb, serverInputs{
 		flag:     serverFlag,
 		client:   clientFlag,
 		profiles: profs,
@@ -149,19 +176,20 @@ func resolveServerFromFlags(cmd *cobra.Command) (string, error) {
 }
 
 // renderPrincipal writes the principal to stdout. --json emits a stable
-// JSON object; the default is dense Markdown. Both render identically
-// in terms of which fields are visible; output format is a presentation
-// choice, never a data-visibility one.
+// JSON object; the default is dense Markdown. The presentation goes
+// through clio.Render so masking invariance (criterion tb7) is
+// enforced by the shared layer rather than per-command custom code.
 func renderPrincipal(cmd *cobra.Command, p identity.Principal) error {
 	useJSON, _ := cmd.Flags().GetBool("json")
+	format := clio.FormatMarkdown
 	if useJSON {
-		enc := json.NewEncoder(cmd.OutOrStdout())
-		enc.SetIndent("", "  ")
-		return enc.Encode(p)
+		format = clio.FormatJSON
 	}
-	fmt.Fprintf(cmd.OutOrStdout(), "# %s\n\n", p.Email)
-	fmt.Fprintf(cmd.OutOrStdout(), "- type: %s\n", p.Type)
-	fmt.Fprintf(cmd.OutOrStdout(), "- tenant: %s\n", p.Tenant)
-	fmt.Fprintf(cmd.OutOrStdout(), "- id: %s\n", p.ID)
-	return nil
+	return clio.Render(cmd.OutOrStdout(), format, p, func(w io.Writer) error {
+		fmt.Fprintf(w, "# %s\n\n", p.Email)
+		fmt.Fprintf(w, "- type: %s\n", p.Type)
+		fmt.Fprintf(w, "- tenant: %s\n", p.Tenant)
+		fmt.Fprintf(w, "- id: %s\n", p.ID)
+		return nil
+	})
 }

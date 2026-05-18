@@ -1,7 +1,7 @@
 package main
 
 import (
-	"fmt"
+	"github.com/bensyverson/kura/internal/clio"
 )
 
 // serverInputs is the set of inputs resolveServer considers. The
@@ -27,8 +27,9 @@ type serverInputs struct {
 //
 // None of the three is an error — the agent gets a one-line message
 // listing all three fixes. An unknown --client surfaces the profile
-// layer's enumerating error untouched.
-func resolveServer(in serverInputs) (string, error) {
+// layer's enumerating error untouched. verb is the calling command's
+// name so the error keeps the greppable `<verb>: ` prefix.
+func resolveServer(verb string, in serverInputs) (string, error) {
 	if in.flag != "" {
 		return in.flag, nil
 	}
@@ -42,5 +43,5 @@ func resolveServer(in serverInputs) (string, error) {
 	if in.cached != "" {
 		return in.cached, nil
 	}
-	return "", fmt.Errorf("no remote server configured — pass --server <URL>, pass --client <name> (with a matching entry in ~/.config/kura/config.json), or run `kura login` to cache one")
+	return "", clio.UsageError(verb, "no remote server configured — pass --server <URL>, pass --client <name> (with a matching entry in ~/.config/kura/config.json), or run `kura login` to cache one")
 }

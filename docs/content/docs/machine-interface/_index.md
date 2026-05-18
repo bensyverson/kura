@@ -7,6 +7,7 @@ How agents and other programs talk to Kura: the HTTP API exposed by `kura serve`
 
 {{< cards >}}
   {{< card link="agent-context" title="agent-context & the operations registry" subtitle="How the CLI, MCP, and agent-context all project from one registry." >}}
+  {{< card link="cli-output" title="CLI output & errors" subtitle="Markdown-default output, greppable error prefixes, and the exit-code taxonomy." >}}
 {{< /cards >}}
 
-Other machine-interface pages are filled in as the HTTP API, CLI, and MCP phases of the build plan land.
+Other machine-interface pages are filled in as the HTTP API and MCP phases of the build plan land.

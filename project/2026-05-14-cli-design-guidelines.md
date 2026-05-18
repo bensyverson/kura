@@ -207,6 +207,11 @@ from the generated surface is a bug.
   reflection, not a separate schema file. Source of truth stays in Go code; all three
   surfaces read the same registry, so there is nothing to drift. See the Phase 0
   "Record & apply: agent-context generation mechanism" task.
-- **Exit-code taxonomy** — enumerate the final list and pin it in a test.
+- **Exit-code taxonomy** — RESOLVED. Six classified kinds plus the
+  nil/unclassified bookends: 0 success, 1 unclassified, 2 usage,
+  3 auth, 4 not-found, 5 conflict, 6 transient, 7 internal. Implemented
+  in `internal/clio`, pinned by `TestExitCodeTaxonomy` and
+  `TestKindEnumerationIsComplete`, and documented at
+  `docs/content/docs/machine-interface/cli-output.md`.
 - **`kura login` flow** — device flow vs. loopback-callback OAuth; how the
   short-lived token is cached and refreshed.

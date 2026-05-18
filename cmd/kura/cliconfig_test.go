@@ -9,7 +9,7 @@ import (
 // select: --server (explicit) wins over --client (profile lookup), and
 // either wins over a cached credential.
 func TestResolveServerExplicitFlagWins(t *testing.T) {
-	got, err := resolveServer(serverInputs{
+	got, err := resolveServer("whoami", serverInputs{
 		flag:     "https://kura.flag.example",
 		client:   "acme",
 		profiles: testProfilesWith(map[string]string{"acme": "https://kura.acme.example"}),
@@ -25,7 +25,7 @@ func TestResolveServerExplicitFlagWins(t *testing.T) {
 
 // With no --server flag, the named client profile wins over the cache.
 func TestResolveServerClientProfileBeatsCache(t *testing.T) {
-	got, err := resolveServer(serverInputs{
+	got, err := resolveServer("whoami", serverInputs{
 		flag:     "",
 		client:   "acme",
 		profiles: testProfilesWith(map[string]string{"acme": "https://kura.acme.example"}),
@@ -42,7 +42,7 @@ func TestResolveServerClientProfileBeatsCache(t *testing.T) {
 // With neither --server nor --client, the cached credential's server is
 // the fallback — `kura login` has set it.
 func TestResolveServerCacheFallback(t *testing.T) {
-	got, err := resolveServer(serverInputs{
+	got, err := resolveServer("whoami", serverInputs{
 		flag:     "",
 		client:   "",
 		profiles: testProfilesWith(nil),
@@ -59,7 +59,7 @@ func TestResolveServerCacheFallback(t *testing.T) {
 // With none of the three, a remote-mode invocation has no idea what to
 // hit — fail loudly and name the three ways to fix it.
 func TestResolveServerNoneIsAnError(t *testing.T) {
-	_, err := resolveServer(serverInputs{
+	_, err := resolveServer("whoami", serverInputs{
 		flag:     "",
 		client:   "",
 		profiles: testProfilesWith(nil),
@@ -79,7 +79,7 @@ func TestResolveServerNoneIsAnError(t *testing.T) {
 // error, untouched, so the agent gets the same message the profile
 // layer would emit directly.
 func TestResolveServerUnknownClientPropagatesError(t *testing.T) {
-	_, err := resolveServer(serverInputs{
+	_, err := resolveServer("whoami", serverInputs{
 		flag:     "",
 		client:   "missing",
 		profiles: testProfilesWith(map[string]string{"acme": "https://x"}),

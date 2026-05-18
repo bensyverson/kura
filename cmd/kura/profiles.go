@@ -3,11 +3,12 @@ package main
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/bensyverson/kura/internal/clio"
 )
 
 // profileClient is one client entry in the profiles config: an endpoint
@@ -44,11 +45,11 @@ func loadProfilesFrom(path string) (*profiles, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return &profiles{Version: "1", Clients: map[string]profileClient{}}, nil
 		}
-		return nil, fmt.Errorf("profiles: reading %s: %w", path, err)
+		return nil, clio.InternalError("profiles", "reading %s: %w", path, err)
 	}
 	var raw rawProfilesForValidation
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil, fmt.Errorf("profiles: parsing %s: %w", path, err)
+		return nil, clio.UsageError("profiles", "parsing %s: %w", path, err)
 	}
 	for name, fields := range raw.Clients {
 		for k := range fields {
@@ -58,13 +59,13 @@ func loadProfilesFrom(path string) (*profiles, error) {
 			default:
 				// "token" / "secret" / anything else is rejected loudly:
 				// credentials never live in profiles.
-				return nil, fmt.Errorf("profiles: client %q has a %q field — credentials never live in profiles (tokens come from `kura login`)", name, k)
+				return nil, clio.UsageError("profiles", "client %q has a %q field — credentials never live in profiles (tokens come from `kura login`)", name, k)
 			}
 		}
 	}
 	var p profiles
 	if err := json.Unmarshal(data, &p); err != nil {
-		return nil, fmt.Errorf("profiles: parsing %s: %w", path, err)
+		return nil, clio.UsageError("profiles", "parsing %s: %w", path, err)
 	}
 	if p.Clients == nil {
 		p.Clients = map[string]profileClient{}
@@ -76,7 +77,7 @@ func loadProfilesFrom(path string) (*profiles, error) {
 func defaultProfilesPath() (string, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
-		return "", fmt.Errorf("profiles: locating config directory: %w", err)
+		return "", clio.InternalError("profiles", "locating config directory: %w", err)
 	}
 	return filepath.Join(base, "kura", "config.json"), nil
 }
@@ -94,7 +95,7 @@ func (p *profiles) endpoint(name string) (string, error) {
 	}
 	sort.Strings(known)
 	if len(known) == 0 {
-		return "", fmt.Errorf("profiles: no client named %q (no profiles are configured — add one under ~/.config/kura/config.json or pass --server directly)", name)
+		return "", clio.NotFoundError("profiles", "no client named %q (no profiles are configured — add one under ~/.config/kura/config.json or pass --server directly)", name)
 	}
-	return "", fmt.Errorf("profiles: no client named %q (known: %v)", name, known)
+	return "", clio.NotFoundError("profiles", "no client named %q (known: %v)", name, known)
 }

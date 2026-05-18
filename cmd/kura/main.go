@@ -6,11 +6,17 @@ package main
 import (
 	"fmt"
 	"os"
+
+	"github.com/bensyverson/kura/internal/clio"
 )
 
 func main() {
-	if err := newRootCmd().Execute(); err != nil {
+	err := newRootCmd().Execute()
+	if err != nil {
+		// stdout is data, stderr is diagnostics — never interleave.
+		// ExitCode walks errors.As, so a clio error wrapped by cobra
+		// or fmt.Errorf still resolves to its taxonomy code.
 		fmt.Fprintln(os.Stderr, "Error:", err.Error())
-		os.Exit(1)
 	}
+	os.Exit(clio.ExitCode(err))
 }

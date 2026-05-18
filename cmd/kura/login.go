@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -18,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bensyverson/kura/internal/clio"
 	"github.com/spf13/cobra"
 )
 
@@ -44,7 +44,7 @@ and caches that token for subsequent kura commands.`,
 				return err
 			}
 			if serverURL == "" {
-				return errors.New("login: --server is required")
+				return clio.UsageError("login", "--server is required")
 			}
 
 			cache, err := defaultTokenCache()
@@ -99,13 +99,13 @@ type loginOutcome struct {
 func (f *loginFlow) run(ctx context.Context) (string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return "", fmt.Errorf("login: binding loopback listener: %w", err)
+		return "", clio.InternalError("login", "binding loopback listener: %w", err)
 	}
 	defer ln.Close()
 
 	state, err := randomState()
 	if err != nil {
-		return "", fmt.Errorf("login: generating state: %w", err)
+		return "", clio.InternalError("login", "generating state: %w", err)
 	}
 
 	loopbackURL := (&url.URL{
@@ -121,13 +121,13 @@ func (f *loginFlow) run(ctx context.Context) (string, error) {
 		q := r.URL.Query()
 		if q.Get("state") != state {
 			http.Error(w, "state mismatch", http.StatusBadRequest)
-			outcome <- loginOutcome{err: errors.New("login: callback state did not match — refusing a possibly injected token")}
+			outcome <- loginOutcome{err: clio.AuthError("login", "callback state did not match — refusing a possibly injected token")}
 			return
 		}
 		token := q.Get("token")
 		if token == "" {
 			http.Error(w, "no token", http.StatusBadRequest)
-			outcome <- loginOutcome{err: errors.New("login: server callback delivered no token")}
+			outcome <- loginOutcome{err: clio.AuthError("login", "server callback delivered no token")}
 			return
 		}
 		io.WriteString(w, loginSuccessPage)
@@ -148,7 +148,7 @@ func (f *loginFlow) run(ctx context.Context) (string, error) {
 	case res := <-outcome:
 		return res.token, res.err
 	case <-ctx.Done():
-		return "", fmt.Errorf("login: timed out waiting for the browser sign-in to complete: %w", ctx.Err())
+		return "", clio.TransientError("login", "timed out waiting for the browser sign-in to complete: %w", ctx.Err())
 	}
 }
 
@@ -177,7 +177,7 @@ type tokenCache struct {
 func defaultTokenCache() (tokenCache, error) {
 	base, err := os.UserConfigDir()
 	if err != nil {
-		return tokenCache{}, fmt.Errorf("login: locating config directory: %w", err)
+		return tokenCache{}, clio.InternalError("login", "locating config directory: %w", err)
 	}
 	return tokenCache{dir: filepath.Join(base, "kura")}, nil
 }
@@ -190,28 +190,28 @@ func (c tokenCache) path() string {
 // save writes the token for serverURL, owner-readable only.
 func (c tokenCache) save(serverURL, token string) error {
 	if err := os.MkdirAll(c.dir, 0o700); err != nil {
-		return fmt.Errorf("login: creating credential directory: %w", err)
+		return clio.InternalError("login", "creating credential directory: %w", err)
 	}
 	data, err := json.Marshal(cachedCredential{Server: serverURL, Token: token})
 	if err != nil {
-		return fmt.Errorf("login: encoding credential: %w", err)
+		return clio.InternalError("login", "encoding credential: %w", err)
 	}
 	if err := os.WriteFile(c.path(), data, 0o600); err != nil {
-		return fmt.Errorf("login: writing credential: %w", err)
+		return clio.InternalError("login", "writing credential: %w", err)
 	}
 	return nil
 }
 
 // load reads the cached server URL and token. A missing cache is an
-// error — the caller has not run `kura login`.
+// auth error — the caller has not run `kura login`.
 func (c tokenCache) load() (serverURL, token string, err error) {
 	data, err := os.ReadFile(c.path())
 	if err != nil {
-		return "", "", fmt.Errorf("login: no cached credential (run `kura login`): %w", err)
+		return "", "", clio.AuthError("login", "no cached credential (run `kura login`): %w", err)
 	}
 	var cred cachedCredential
 	if err := json.Unmarshal(data, &cred); err != nil {
-		return "", "", fmt.Errorf("login: cached credential is corrupt: %w", err)
+		return "", "", clio.InternalError("login", "cached credential is corrupt: %w", err)
 	}
 	return cred.Server, cred.Token, nil
 }
