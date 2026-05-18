@@ -1,14 +1,6 @@
 package server
 
-import (
-	"context"
-
-	// go-oidc is the OIDC discovery + JWKS verifier the Entra and
-	// generic-OIDC IdP implementations build on. It is anchored here
-	// so the dependency lands as its own reviewable change ahead of
-	// those implementations.
-	_ "github.com/coreos/go-oidc/v3/oidc"
-)
+import "context"
 
 // IdentityProvider is the seam over a single IdP family's side of the
 // OAuth/OIDC sign-in flow. A real implementation builds the consent URL,
