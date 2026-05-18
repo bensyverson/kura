@@ -129,6 +129,44 @@ func TestMemUserStoreIsAUserStore(t *testing.T) {
 	var _ UserStore = NewMemUserStore()
 }
 
+// DeactivateUser revokes every role atomically and leaves the user on
+// the authorized list — `kura user deactivate` is auditable history, not
+// a delete. Idempotent: deactivating an already-roleless user is a no-op.
+func TestMemUserStoreDeactivateRevokesAllRoles(t *testing.T) {
+	s := NewMemUserStore()
+	ctx := context.Background()
+	_ = s.AddUser(ctx, "bob@client.com")
+	_ = s.AssignRoles(ctx, "bob@client.com", "user", "auditor", "admin")
+
+	if err := s.DeactivateUser(ctx, "bob@client.com"); err != nil {
+		t.Fatalf("DeactivateUser: %v", err)
+	}
+	roles, _ := s.Roles(ctx, human("bob@client.com"))
+	if len(roles) != 0 {
+		t.Errorf("roles after deactivate = %v, want none", roles)
+	}
+	// The user stays on the list.
+	users, _ := s.ListUsers(ctx)
+	if len(users) != 1 || users[0].Email != "bob@client.com" {
+		t.Errorf("deactivated user is no longer on the authorized list: %+v", users)
+	}
+
+	// Idempotent: deactivating again is a no-op.
+	if err := s.DeactivateUser(ctx, "bob@client.com"); err != nil {
+		t.Errorf("repeat DeactivateUser: %v", err)
+	}
+}
+
+// Deactivating a user not on the authorized list is ErrUserNotFound,
+// matching AssignRoles/RevokeRoles — the operations form a consistent
+// pair.
+func TestMemUserStoreDeactivateUnlistedIsErrUserNotFound(t *testing.T) {
+	s := NewMemUserStore()
+	if err := s.DeactivateUser(context.Background(), "ghost@client.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("DeactivateUser(unlisted) = %v, want ErrUserNotFound", err)
+	}
+}
+
 // DetectIdPMismatches flags every authorized user who still holds roles
 // but whose identity-provider account is no longer active — suspended
 // or absent. A user with no roles is never a mismatch (there is no

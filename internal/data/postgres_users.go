@@ -127,6 +127,22 @@ func (s *PostgresUserStore) RevokeRoles(ctx context.Context, email string, roles
 	})
 }
 
+// DeactivateUser atomically revokes every role email holds. One DELETE
+// in a read-write transaction — the whole set goes in one statement, so
+// it cannot leave the user partially deactivated.
+func (s *PostgresUserStore) DeactivateUser(ctx context.Context, email string) error {
+	email = strings.ToLower(email)
+	return withTenantTx(ctx, s.db, s.tenantID, false, func(tx *sql.Tx) error {
+		userID, err := userIDByEmail(ctx, tx, email)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx,
+			`DELETE FROM kura.role_assignments WHERE user_id = $1`, userID)
+		return err
+	})
+}
+
 // Roles resolves principal to its role names. A principal not on the
 // authorized list resolves to no roles — not an error.
 func (s *PostgresUserStore) Roles(ctx context.Context, principal identity.Principal) ([]string, error) {

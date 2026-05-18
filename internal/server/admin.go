@@ -23,6 +23,7 @@ func (s *Server) registerAdminRoutes() {
 	users := s.cfg.Users
 	s.registerAdmin("POST /api/users", addUserBinding(users))
 	s.registerAdmin("GET /api/users", listUsersBinding(users))
+	s.registerAdmin("DELETE /api/users/{email}", deactivateUserBinding(users))
 	s.registerAdmin("POST /api/users/{email}/roles", roleBinding(users, true))
 	s.registerAdmin("DELETE /api/users/{email}/roles", roleBinding(users, false))
 	s.registerAdmin("GET /api/users/mismatches", mismatchesBinding(users, s.cfg.IdP))
@@ -79,6 +80,28 @@ func listUsersBinding(users data.UserStore) adminBinding {
 				return nil, err
 			}
 			return usersResponse{Users: list}, nil
+		}
+		return req, op, nil
+	}
+}
+
+// deactivateUserBinding builds the binding for DELETE /api/users/{email}:
+// atomically revoke every role the user holds, leaving them on the
+// authorized list. A mutation, so it needs the admin role; the store's
+// own atomicity is what keeps the role-strip all-or-nothing.
+func deactivateUserBinding(users data.UserStore) adminBinding {
+	return func(r *http.Request, _ identity.Principal) (gate.AdminRequest, adminOp, error) {
+		email := r.PathValue("email")
+		if email == "" {
+			return gate.AdminRequest{}, nil, errors.New("server: deactivate user requires an email in the path")
+		}
+		req := gate.AdminRequest{
+			Token:    bearerToken(r),
+			Action:   gate.AdminManage,
+			Resource: audit.Resource{Entity: "user", ID: email},
+		}
+		op := func(ctx context.Context) (any, error) {
+			return nil, users.DeactivateUser(ctx, email)
 		}
 		return req, op, nil
 	}

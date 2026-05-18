@@ -187,6 +187,55 @@ func TestAssignRolesUnknownUserIsNotFound(t *testing.T) {
 	}
 }
 
+// dB5: a user is deactivated through DELETE /api/users/{email}, which
+// atomically strips every role and leaves the user on the authorized
+// list — auditable history, not a delete. Only an admin may do it.
+func TestDeactivateUserRequiresAdmin(t *testing.T) {
+	srv, users, _, adminTok, auditorTok, userTok := adminServer(t)
+	if err := users.AddUser(t.Context(), "victim@client.com"); err != nil {
+		t.Fatalf("seeding: %v", err)
+	}
+	if err := users.AssignRoles(t.Context(), "victim@client.com", "user", "auditor"); err != nil {
+		t.Fatalf("seeding roles: %v", err)
+	}
+
+	if rec := doReq(t, srv, http.MethodDelete, "/api/users/victim@client.com", userTok, ""); rec.status != http.StatusForbidden {
+		t.Errorf("deactivate as plain user: status = %d, want 403", rec.status)
+	}
+	if rec := doReq(t, srv, http.MethodDelete, "/api/users/victim@client.com", auditorTok, ""); rec.status != http.StatusForbidden {
+		t.Errorf("deactivate as auditor: status = %d, want 403", rec.status)
+	}
+
+	rec := doReq(t, srv, http.MethodDelete, "/api/users/victim@client.com", adminTok, "")
+	if rec.status != http.StatusNoContent {
+		t.Fatalf("deactivate as admin: status = %d, want 204; body %s", rec.status, rec.body.String())
+	}
+	roles, _ := users.Roles(t.Context(), identity.Principal{Type: identity.PrincipalUser, ID: "victim@client.com", Email: "victim@client.com", Tenant: "client.com"})
+	if len(roles) != 0 {
+		t.Errorf("after deactivate, roles = %v, want none", roles)
+	}
+	listed, _ := users.ListUsers(t.Context())
+	stillThere := false
+	for _, u := range listed {
+		if u.Email == "victim@client.com" {
+			stillThere = true
+		}
+	}
+	if !stillThere {
+		t.Error("deactivated user is no longer on the authorized list — deactivation must preserve audit history")
+	}
+}
+
+// Deactivating an unlisted user is a 404 — the same shape as the role
+// ops, mapped from data.ErrUserNotFound.
+func TestDeactivateUnlistedIsNotFound(t *testing.T) {
+	srv, _, _, adminTok, _, _ := adminServer(t)
+	rec := doReq(t, srv, http.MethodDelete, "/api/users/ghost@client.com", adminTok, "")
+	if rec.status != http.StatusNotFound {
+		t.Errorf("deactivate unlisted user: status = %d, want 404", rec.status)
+	}
+}
+
 // vEr: the effective policy is readable through the API.
 func TestEffectivePolicyIsReadable(t *testing.T) {
 	srv, _, _, adminTok, _, _ := adminServer(t)
@@ -260,7 +309,7 @@ func TestIdPMismatchesAreDetectable(t *testing.T) {
 func TestAdminRoutesAreGated(t *testing.T) {
 	srv, _, _, _, _, _ := adminServer(t)
 	for _, pattern := range []string{
-		"POST /api/users", "GET /api/users",
+		"POST /api/users", "GET /api/users", "DELETE /api/users/{email}",
 		"POST /api/users/{email}/roles", "DELETE /api/users/{email}/roles",
 		"GET /api/policy", "GET /api/users/mismatches",
 	} {

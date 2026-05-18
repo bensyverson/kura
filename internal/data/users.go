@@ -43,6 +43,12 @@ type UserStore interface {
 	// a role the user does not hold is a no-op; the user must be on the
 	// authorized list, else ErrUserNotFound.
 	RevokeRoles(ctx context.Context, email string, roles ...string) error
+	// DeactivateUser atomically revokes every role email holds, leaving
+	// the user on the authorized list (deactivation is auditable history,
+	// not a delete). Idempotent: deactivating an already-roleless user is
+	// a no-op. The user must be on the authorized list, else
+	// ErrUserNotFound.
+	DeactivateUser(ctx context.Context, email string) error
 	// Roles resolves principal to the role names it holds, satisfying
 	// gate.RoleResolver. A principal not on the list has no roles — not
 	// an error, just no access.
@@ -161,6 +167,18 @@ func (s *MemUserStore) RevokeRoles(_ context.Context, email string, roles ...str
 		}
 	}
 	s.roles[email] = kept
+	return nil
+}
+
+// DeactivateUser revokes every role email holds, atomically.
+func (s *MemUserStore) DeactivateUser(_ context.Context, email string) error {
+	email = strings.ToLower(email)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.roles[email]; !ok {
+		return ErrUserNotFound
+	}
+	s.roles[email] = nil
 	return nil
 }
 

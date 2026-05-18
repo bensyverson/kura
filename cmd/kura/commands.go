@@ -50,8 +50,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newWhoamiCmd())
 	cmd.AddCommand(newProfileCmd())
 	cmd.AddCommand(newStubCmd("init", "Materialize a per-client deployment scaffold"))
-	cmd.AddCommand(newStubCmd("user", "Manage users"))
-	cmd.AddCommand(newStubCmd("role", "Manage role assignments"))
+	cmd.AddCommand(newUserCmd())
+	cmd.AddCommand(newRoleCmd())
 	cmd.AddCommand(newStubCmd("query", "Query records (filtered, bounded, masked)"))
 	cmd.AddCommand(newStubCmd("show", "Show a single record with related entities"))
 

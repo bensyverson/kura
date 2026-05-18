@@ -121,6 +121,45 @@ func TestPostgresUserStoreRoleOpsRequireListedUser(t *testing.T) {
 	}
 }
 
+// DeactivateUser strips every role atomically and leaves the user on the
+// list — `kura user deactivate` is auditable history, not a delete.
+func TestPostgresUserStoreDeactivate(t *testing.T) {
+	env := newDataTestEnv(t)
+	tenant := newTenantID(t, env)
+	store, err := NewPostgresUserStore(connectAsAPIRole(t, env), tenant)
+	if err != nil {
+		t.Fatalf("NewPostgresUserStore: %v", err)
+	}
+	ctx := context.Background()
+	if err := store.AddUser(ctx, "bob@client.com"); err != nil {
+		t.Fatalf("AddUser: %v", err)
+	}
+	if err := store.AssignRoles(ctx, "bob@client.com", "user", "auditor", "admin"); err != nil {
+		t.Fatalf("AssignRoles: %v", err)
+	}
+
+	if err := store.DeactivateUser(ctx, "bob@client.com"); err != nil {
+		t.Fatalf("DeactivateUser: %v", err)
+	}
+	roles, _ := store.Roles(ctx, human("bob@client.com"))
+	if len(roles) != 0 {
+		t.Errorf("roles after deactivate = %v, want none", roles)
+	}
+	users, _ := store.ListUsers(ctx)
+	if len(users) != 1 || users[0].Email != "bob@client.com" {
+		t.Errorf("deactivated user is no longer on the authorized list: %+v", users)
+	}
+
+	// Idempotent.
+	if err := store.DeactivateUser(ctx, "bob@client.com"); err != nil {
+		t.Errorf("repeat DeactivateUser: %v", err)
+	}
+	// Unlisted user is ErrUserNotFound — same as the role ops.
+	if err := store.DeactivateUser(ctx, "ghost@client.com"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("DeactivateUser(unlisted) = %v, want ErrUserNotFound", err)
+	}
+}
+
 // frQ-style isolation: the authorized list is tenant-scoped by RLS. A
 // store for one tenant cannot see — or mutate — another tenant's users.
 func TestPostgresUserStoreCrossTenantIsolation(t *testing.T) {
