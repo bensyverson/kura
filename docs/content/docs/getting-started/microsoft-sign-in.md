@@ -92,11 +92,14 @@ variables when running `kura serve`:
 | `KURA_MICROSOFT_TENANT_ID`        | Directory (tenant) ID, or `common` for multi-tenant |
 | `KURA_PUBLIC_URL`                 | The deployment's public URL                        |
 
-The Kura-side tenant-trust configuration
-(`KURA_FIRM_TENANT`, `KURA_CLIENT_TENANTS`, `KURA_ADMIN_EMAILS`) works
-the same as for the Google IdP — for Microsoft, the **tenant key is
-the Entra Directory (tenant) ID**, not a domain. Put each accepted
-tenant ID in the trust list.
+The Kura-side tenant-trust configuration (`KURA_FIRM_DOMAIN`,
+`KURA_CLIENT_DOMAINS`, `KURA_ADMIN_EMAILS`) is shared across all
+IdPs — the variable names mention "domain" for historical reasons,
+but each one holds the tenant identifier in whatever shape the
+configured IdP uses. For Microsoft the **tenant key is the Entra
+Directory (tenant) ID**, not a domain. Put each accepted tenant ID
+in the trust list. See [Tenant trust](tenant-trust) for the
+cross-IdP details.
 
 `KURA_IDP` is required — there is no default. A deployment must
 explicitly pick one of `google`, `microsoft`, or `oidc`; an unset

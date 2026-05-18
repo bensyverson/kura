@@ -1,6 +1,6 @@
 ---
 title: Google Workspace directory
-weight: 4
+weight: 6
 ---
 
 The **Google Workspace directory** is the IdP-side seam Kura reads to

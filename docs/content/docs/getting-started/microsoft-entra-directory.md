@@ -1,6 +1,6 @@
 ---
 title: Microsoft Entra directory
-weight: 5
+weight: 7
 ---
 
 The **Microsoft Entra directory** is the IdP-side seam Kura reads to

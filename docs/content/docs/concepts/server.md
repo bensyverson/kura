@@ -111,38 +111,85 @@ the same — authorized and audited by construction.
 - **`/api/policy` is read-only.** The effective policy is rendered from
   the [Cedar IR](policy); there is no write method on the route, because
   policy authoring stays a repo/PR activity, not a server endpoint.
-- **IdP mismatches** — a suspended or absent Google Workspace account
-  that still holds Kura roles — are surfaced by `GET /api/users/mismatches`,
-  which cross-checks the authorized list against the identity provider.
+- **IdP mismatches** — a suspended or absent account in the configured
+  identity provider that still holds Kura roles — are surfaced by
+  `GET /api/users/mismatches`, which cross-checks the authorized list
+  against the vendor [Directory client](identity) (Google Workspace
+  Admin SDK, Microsoft Graph, or a no-op for generic OIDC, picked by
+  `KURA_IDP`).
 
-## Sign-in: the loopback OAuth handoff
+## Sign-in: the loopback OAuth/OIDC handoff
 
-The token a request carries is minted by `kura serve` after a Google
-sign-in. The flow is a **loopback handoff** — chosen over the OAuth device
-flow because the consultant runs `kura` from a workstation with a browser,
-it is the smoothest UX there, and it matches the precedent set by Google's
-own Workspace CLI:
+The token a request carries is minted by `kura serve` after the
+consultant authenticates against whichever IdP the deployment is
+configured for. The flow is a **loopback handoff** — chosen over the
+OAuth device flow because the consultant runs `kura` from a workstation
+with a browser, it is the smoothest UX there, and it matches the
+precedent set by Google's own Workspace CLI.
+
+The protocol is **family-agnostic**. The four IdP families Kura supports
+(Google, Microsoft Entra, generic OIDC, plus the test fake) plug in
+behind a single `IdentityProvider` seam — the piece that runs the code
+exchange and verifies the id_token. The loopback handoff above this
+seam looks the same for every family:
 
 1. `kura login` binds a temporary `127.0.0.1` listener, generates a
    `state`, and opens the browser to `GET /oauth/login?redirect=<loopback>`.
    The server refuses any `redirect` that is not a loopback address — a
    token redirect to an arbitrary host would be a token leak.
 2. `/oauth/login` stores the loopback target under a fresh server-side
-   `state` and redirects the browser to Google.
-3. The consultant authenticates with Google against the firm (or client)
-   Workspace domain. Google redirects back to `/oauth/callback`.
+   `state` and redirects the browser to the configured IdP.
+3. The consultant authenticates with the IdP against the firm (or
+   client) tenant. The IdP redirects back to `/oauth/callback`.
 4. `/oauth/callback` — the **only** point that mints a token — exchanges
-   the code for a verified identity, maps the `hd` hosted-domain claim to
-   a Cedar principal via [domain trust](identity), issues a short-lived
-   HMAC token, records the authentication, and redirects the browser to
-   the CLI's loopback URL with the token attached.
+   the code for a verified identity through the configured
+   `IdentityProvider`, maps the resulting `(email, tenant)` to a Cedar
+   principal via [TenantTrust](identity), issues a short-lived HMAC
+   token, records the authentication, and redirects the browser to the
+   CLI's loopback URL with the token attached.
 5. The CLI's loopback listener verifies the round-tripped `state`, catches
    the token, and caches it under the user's config directory.
 
-State is single-use and TTL-bounded on both legs. The Google code
-exchange and id_token verification go through `golang.org/x/oauth2` and
-`google.golang.org/api/idtoken` — verifying RS256 against Google's
-rotating keys is not something to hand-roll on a security boundary.
+State is single-use and TTL-bounded on both legs.
+
+### Per-IdP verification details
+
+Each `IdentityProvider` implementation owns its own verification — the
+shape that arrives at step 4 is always a `VerifiedIdentity{Email,
+Tenant, Issuer}`, but how each field is produced differs:
+
+- **Google.** Code exchange via `golang.org/x/oauth2`; id_token
+  verified by `google.golang.org/api/idtoken` (RS256 against Google's
+  rotating JWKS). `Tenant` comes from the `hd` (hosted-domain) claim;
+  an id_token without `hd` or with `email_verified=false` is rejected
+  outright — a Kura principal must come from a verified Workspace
+  identity, never a bare Gmail account.
+- **Microsoft Entra.** OIDC discovery against
+  `https://login.microsoftonline.com/<tenant>/v2.0` at startup; tokens
+  verified by `coreos/go-oidc` against the cached JWKS. `Tenant` comes
+  from the `tid` claim (the actual signing tenant). For `tenant=common`
+  the issuer field is a template, so per-token issuer-equality is
+  skipped — the trust decision belongs to `TenantTrust` on `tid`. A
+  token without `tid` is rejected.
+- **Generic OIDC.** Discovery against the configured issuer URL at
+  startup; tokens verified by `coreos/go-oidc`. `Tenant` is the
+  **issuer URL itself** — OIDC core has no tenant claim — so two
+  Keycloak realms or two Auth0 tenants are two Kura tenants. As with
+  Google, `email_verified=false` is rejected.
+
+The pieces *outside* the seam — `TenantTrust`, the token model, the
+audit log, the gate — never see which family signed the request; they
+see only the verified identity.
+
+## Caveat: the rest of `kura serve` is still mid-build
+
+The endpoints above are the v1 surface. A few collaborators are still
+v1 placeholders — the in-memory `MemStore` for records, the in-memory
+`MemUserStore` for the authorized-user list, the in-memory audit
+backing — that will land as their own build-plan tasks before any data
+schema is loaded. The IdP-mismatch endpoint is *real* on Google and
+Microsoft now; on generic OIDC it answers consistently empty (see
+[Identity](identity) for the why).
 
 ## Conventions
 
