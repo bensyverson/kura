@@ -48,6 +48,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())
 	cmd.AddCommand(newWhoamiCmd())
+	cmd.AddCommand(newProfileCmd())
 	cmd.AddCommand(newStubCmd("init", "Materialize a per-client deployment scaffold"))
 	cmd.AddCommand(newStubCmd("user", "Manage users"))
 	cmd.AddCommand(newStubCmd("role", "Manage role assignments"))

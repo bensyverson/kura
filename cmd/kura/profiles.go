@@ -82,6 +82,25 @@ func defaultProfilesPath() (string, error) {
 	return filepath.Join(base, "kura", "config.json"), nil
 }
 
+// saveProfilesTo writes p to path with owner-only permissions. The
+// file format is the same shape loadProfilesFrom reads, and the
+// loader's credential-shaped-field rejection is the matching read-
+// side defense — together they make it structurally impossible for a
+// token to round-trip through a profile.
+func saveProfilesTo(path string, p *profiles) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return clio.InternalError("profiles", "creating config directory: %w", err)
+	}
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return clio.InternalError("profiles", "encoding: %w", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return clio.InternalError("profiles", "writing %s: %w", path, err)
+	}
+	return nil
+}
+
 // endpoint returns the endpoint URL registered for name. An unknown
 // name is an error that enumerates the known names — the agent sees
 // the valid set without grepping the config.
