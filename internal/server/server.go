@@ -150,6 +150,7 @@ func New(cfg Config) (*Server, error) {
 	s.registerAdminRoutes()
 	s.registerAuditRoutes()
 	s.registerLLMRoute()
+	s.registerWhoami()
 	return s, nil
 }
 

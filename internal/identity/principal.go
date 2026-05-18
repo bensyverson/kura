@@ -53,16 +53,16 @@ func (t PrincipalType) isHuman() bool {
 // Principal is an authenticated actor. Every action in Kura is
 // attributed to one in the audit log.
 type Principal struct {
-	Type PrincipalType
+	Type PrincipalType `json:"type"`
 	// ID is the stable identifier — the Cedar entity id. For a human
 	// principal it is the email; for a service principal it is the
 	// service name.
-	ID string
+	ID string `json:"id"`
 	// Email and Tenant are populated for human principals only. Tenant
 	// is the IdP tenant identifier (e.g. a Workspace domain, an Entra
 	// tenant ID, or an Okta org).
-	Email  string
-	Tenant string
+	Email  string `json:"email,omitempty"`
+	Tenant string `json:"tenant,omitempty"`
 }
 
 // Valid reports whether p is a well-formed principal, naming the first

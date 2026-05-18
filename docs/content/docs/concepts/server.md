@@ -100,6 +100,7 @@ the same — authorized and audited by construction.
 | `DELETE /api/users/{email}/roles` | `AdminManage` | admin |
 | `GET /api/users/mismatches` | `AdminReview` | admin or auditor |
 | `GET /api/policy` | `AdminReview` | admin or auditor |
+| `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
   list, the effective policy, the IdP mismatches — are access-review
@@ -111,6 +112,12 @@ the same — authorized and audited by construction.
 - **`/api/policy` is read-only.** The effective policy is rendered from
   the [Cedar IR](policy); there is no write method on the route, because
   policy authoring stays a repo/PR activity, not a server endpoint.
+- **`/api/whoami` is the self-identity read.** It returns the principal
+  `requireAuth` resolved for the bearer token — type, id, email, tenant
+  — and nothing else. No additional gate decision is needed: reading
+  your own identity is implicit in being authenticated, and the auth
+  event the recorder writes already covers it. `kura whoami` is the
+  CLI client.
 - **IdP mismatches** — a suspended or absent account in the configured
   identity provider that still holds Kura roles — are surfaced by
   `GET /api/users/mismatches`, which cross-checks the authorized list

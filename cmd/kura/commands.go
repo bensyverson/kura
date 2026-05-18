@@ -29,6 +29,16 @@ func newRootCmd() *cobra.Command {
 		SilenceErrors: true,
 	}
 
+	// Global persistent flags inherited by every verb — the agent-side
+	// state-carrying contract. Flags and profiles carry state across
+	// invocations; nothing relies on shell/env persistence.
+	cmd.PersistentFlags().String("server", "", "remote kura serve URL (overrides --client and the cached login)")
+	cmd.PersistentFlags().String("client", "", "named client profile to resolve to a server URL (config: ~/.config/kura/config.json)")
+	cmd.PersistentFlags().String("as", "", "act as this principal email (--local: required; remote: ignored, the cached token is the identity)")
+	cmd.PersistentFlags().Bool("json", false, "emit JSON instead of dense Markdown (masking is identical in both)")
+	cmd.PersistentFlags().Bool("local", false, "break-glass: skip the remote server and call the core gate directly on-box")
+	cmd.PersistentFlags().Bool("confirm", false, "confirm a destructive action (no prompts; this flag is the only confirmation)")
+
 	// The product surfaces (build plan phases 2, 4, 5, 7) and the core CLI
 	// verbs (phase 3). All stubs for now; each phase replaces its own.
 	cmd.AddCommand(newStubCmd("status", "Session opener: identity check and landscape briefing"))
@@ -36,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newStubCmd("dashboard", "Run the local web dashboard (loopback-bound HTTP client)"))
 	cmd.AddCommand(newStubCmd("mcp", "Run the MCP server (local stdio proxy by default)"))
 	cmd.AddCommand(newLoginCmd())
+	cmd.AddCommand(newWhoamiCmd())
 	cmd.AddCommand(newStubCmd("init", "Materialize a per-client deployment scaffold"))
 	cmd.AddCommand(newStubCmd("user", "Manage users"))
 	cmd.AddCommand(newStubCmd("role", "Manage role assignments"))
