@@ -45,13 +45,20 @@ func newServeCmd() *cobra.Command {
 Configuration is read from the environment:
 
   KURA_SIGNING_SECRET        secret for signing identity tokens (required)
-  KURA_IDP                   identity provider family: google (default) or
+  KURA_IDP                   identity provider family: google, microsoft, or
                              oidc. Selects which set of IdP variables below
-                             are required.
+                             are required (required)
   KURA_GOOGLE_CLIENT_ID      Google OAuth client ID (required when
                              KURA_IDP=google)
   KURA_GOOGLE_CLIENT_SECRET  Google OAuth client secret (required when
                              KURA_IDP=google)
+  KURA_MICROSOFT_TENANT_ID   Microsoft Entra Directory (tenant) ID, or
+                             "common" for multi-tenant (required when
+                             KURA_IDP=microsoft)
+  KURA_MICROSOFT_CLIENT_ID   Microsoft Entra app Application (client) ID
+                             (required when KURA_IDP=microsoft)
+  KURA_MICROSOFT_CLIENT_SECRET Microsoft Entra app client secret value
+                             (required when KURA_IDP=microsoft)
   KURA_OIDC_ISSUER_URL       OIDC issuer URL — discovery happens at
                              <URL>/.well-known/openid-configuration
                              (required when KURA_IDP=oidc)
@@ -59,6 +66,10 @@ Configuration is read from the environment:
                              when KURA_IDP=oidc)
   KURA_OIDC_CLIENT_SECRET    OIDC client secret issued by the IdP
                              (required when KURA_IDP=oidc)
+  KURA_OAUTH_REDIRECT_URL    OAuth redirect URI registered with the IdP.
+                             Defaults to <KURA_PUBLIC_URL>/oauth/callback;
+                             override when a proxy terminates at a path
+                             other than the public root
   KURA_PUBLIC_URL            the server's public base URL, e.g.
                              https://kura.client.example (required)
   KURA_FIRM_DOMAIN           the consulting firm's Workspace domain;
@@ -126,7 +137,12 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 
-	idp, err := buildIdP(getenv, publicURL)
+	redirectURL := getenv("KURA_OAUTH_REDIRECT_URL")
+	if redirectURL == "" {
+		redirectURL = strings.TrimRight(publicURL, "/") + "/oauth/callback"
+	}
+
+	idp, err := buildIdP(getenv, redirectURL)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -203,22 +219,27 @@ func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gat
 
 // buildIdP picks an IdentityProvider implementation by KURA_IDP and
 // hydrates it from the corresponding family of environment variables.
-// The default (KURA_IDP unset or "google") is the Google IdP — the only
-// family that does not require network access at construction.
+// KURA_IDP is required — a deployment with an unset selector fails
+// startup rather than silently falling through to a default.
 //
-// "oidc" wires the generic OIDC IdP. Discovery and the JWKS fetch
-// happen here, so this branch makes a network call against
-// KURA_OIDC_ISSUER_URL bounded by oidcDiscoveryTimeout. An unreachable
-// issuer fails serve startup loudly rather than hanging.
+// "google" wires the Google IdP from KURA_GOOGLE_*.
 //
-// Microsoft Entra is a Phase E (yqMyY) task — the IdP implementation
-// (NewMicrosoftIdP) is ready, but selection from this dispatcher and
-// the matching docs land with that task.
-func buildIdP(getenv func(string) string, publicURL string) (server.IdentityProvider, error) {
-	redirectURL := strings.TrimRight(publicURL, "/") + "/oauth/callback"
+// "oidc" wires the generic OIDC IdP from KURA_OIDC_*. Discovery and
+// the JWKS fetch happen here, so this branch makes a network call
+// against KURA_OIDC_ISSUER_URL bounded by oidcDiscoveryTimeout — an
+// unreachable issuer fails serve startup loudly rather than hanging.
+//
+// "microsoft" wires the Microsoft Entra IdP from KURA_MICROSOFT_*.
+// Like the OIDC branch this performs network discovery, against
+// https://login.microsoftonline.com/<tenant>/v2.0.
+//
+// All branches share redirectURL — the OAuth redirect URI is a
+// property of the deployment, not the IdP family, so it is computed
+// once by serveConfig.
+func buildIdP(getenv func(string) string, redirectURL string) (server.IdentityProvider, error) {
 	kind := strings.ToLower(strings.TrimSpace(getenv("KURA_IDP")))
 	if kind == "" {
-		kind = "google"
+		return nil, fmt.Errorf("serve: required environment variable KURA_IDP is not set (expected one of: google, microsoft, oidc)")
 	}
 	required := func(key string) (string, error) {
 		if v := getenv(key); v != "" {
@@ -241,6 +262,27 @@ func buildIdP(getenv func(string) string, publicURL string) (server.IdentityProv
 			ClientSecret: clientSecret,
 			RedirectURL:  redirectURL,
 		}), nil
+	case "microsoft":
+		tenantID, err := required("KURA_MICROSOFT_TENANT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientID, err := required("KURA_MICROSOFT_CLIENT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientSecret, err := required("KURA_MICROSOFT_CLIENT_SECRET")
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+		defer cancel()
+		return server.NewMicrosoftIdP(ctx, server.MicrosoftConfig{
+			TenantID:     tenantID,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			RedirectURL:  redirectURL,
+		})
 	case "oidc":
 		issuerURL, err := required("KURA_OIDC_ISSUER_URL")
 		if err != nil {
@@ -263,7 +305,7 @@ func buildIdP(getenv func(string) string, publicURL string) (server.IdentityProv
 			RedirectURL:  redirectURL,
 		})
 	default:
-		return nil, fmt.Errorf("serve: KURA_IDP=%q is not a recognized identity provider (expected one of: google, oidc)", kind)
+		return nil, fmt.Errorf("serve: KURA_IDP=%q is not a recognized identity provider (expected one of: google, microsoft, oidc)", kind)
 	}
 }
 

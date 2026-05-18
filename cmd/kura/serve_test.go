@@ -15,6 +15,7 @@ import (
 func serveEnv() map[string]string {
 	return map[string]string{
 		"KURA_SIGNING_SECRET":        "a-test-signing-secret",
+		"KURA_IDP":                   "google",
 		"KURA_GOOGLE_CLIENT_ID":      "client-id.apps.googleusercontent.com",
 		"KURA_GOOGLE_CLIENT_SECRET":  "google-client-secret",
 		"KURA_PUBLIC_URL":            "https://kura.client.example",
@@ -152,17 +153,19 @@ func TestServeCommandHasAddrFlag(t *testing.T) {
 	}
 }
 
-// With KURA_IDP unset, serveConfig defaults to the Google IdP — the
-// existing behavior must continue to work without an explicit selector.
-func TestServeConfigDefaultsToGoogleIdP(t *testing.T) {
+// KURA_IDP is required: a deployment that has not picked an identity
+// provider must fail startup loudly rather than fall through to a
+// default. A typo in the selector would otherwise silently change who
+// can sign in.
+func TestServeConfigRequiresKURA_IDP(t *testing.T) {
 	env := serveEnv()
 	delete(env, "KURA_IDP")
-	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
-	if err != nil {
-		t.Fatalf("serveConfig with KURA_IDP unset: %v", err)
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted an unset KURA_IDP — must require an explicit selector")
 	}
-	if cfg.Google == nil {
-		t.Error("serveConfig did not populate the IdP for the default selector")
+	if !strings.Contains(err.Error(), "KURA_IDP") {
+		t.Errorf("error %q does not name KURA_IDP", err)
 	}
 }
 
@@ -294,6 +297,111 @@ func TestServeConfigOIDCBuildsIdP(t *testing.T) {
 	authURL := cfg.Google.AuthCodeURL("state")
 	if !strings.HasPrefix(authURL, disc.URL+"/auth") {
 		t.Errorf("AuthCodeURL = %q, expected to begin with %q — wrong IdP wired", authURL, disc.URL+"/auth")
+	}
+}
+
+// With KURA_IDP=microsoft, missing KURA_MICROSOFT_TENANT_ID must fail
+// before any network discovery is attempted.
+func TestServeConfigMicrosoftRequiresTenantID(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "microsoft"
+	env["KURA_MICROSOFT_CLIENT_ID"] = "kura"
+	env["KURA_MICROSOFT_CLIENT_SECRET"] = "shh"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=microsoft with no KURA_MICROSOFT_TENANT_ID")
+	}
+	if !strings.Contains(err.Error(), "KURA_MICROSOFT_TENANT_ID") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=microsoft, missing KURA_MICROSOFT_CLIENT_ID must fail.
+func TestServeConfigMicrosoftRequiresClientID(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "microsoft"
+	env["KURA_MICROSOFT_TENANT_ID"] = "common"
+	env["KURA_MICROSOFT_CLIENT_SECRET"] = "shh"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=microsoft with no KURA_MICROSOFT_CLIENT_ID")
+	}
+	if !strings.Contains(err.Error(), "KURA_MICROSOFT_CLIENT_ID") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=microsoft, missing KURA_MICROSOFT_CLIENT_SECRET must fail.
+func TestServeConfigMicrosoftRequiresClientSecret(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "microsoft"
+	env["KURA_MICROSOFT_TENANT_ID"] = "common"
+	env["KURA_MICROSOFT_CLIENT_ID"] = "kura"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=microsoft with no KURA_MICROSOFT_CLIENT_SECRET")
+	}
+	if !strings.Contains(err.Error(), "KURA_MICROSOFT_CLIENT_SECRET") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=microsoft, the Google and OIDC client credentials are
+// not required — a Microsoft-only deployment must boot without ever
+// setting them.
+func TestServeConfigMicrosoftDoesNotRequireOtherIdPVars(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "microsoft"
+	delete(env, "KURA_GOOGLE_CLIENT_ID")
+	delete(env, "KURA_GOOGLE_CLIENT_SECRET")
+	env["KURA_MICROSOFT_TENANT_ID"] = "common"
+	env["KURA_MICROSOFT_CLIENT_ID"] = "kura"
+	env["KURA_MICROSOFT_CLIENT_SECRET"] = "shh"
+	// We cannot complete construction without reaching the real Entra
+	// discovery endpoint, so a non-network error here means the config
+	// surface accepted Microsoft on its own. The discovery error is
+	// expected when offline; the validation errors are not.
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		msg := err.Error()
+		// Validation errors mention the env var names; a discovery
+		// error mentions "discovery" or the issuer URL.
+		if strings.Contains(msg, "KURA_GOOGLE") || strings.Contains(msg, "KURA_OIDC") {
+			t.Errorf("Microsoft path required a non-Microsoft env var: %v", err)
+		}
+	}
+}
+
+// KURA_OAUTH_REDIRECT_URL, when set, overrides the default redirect
+// URL derived from KURA_PUBLIC_URL. The override flows through to the
+// IdP, so the consent-screen URL carries the operator-chosen
+// redirect_uri.
+func TestServeConfigOAuthRedirectURLOverride(t *testing.T) {
+	env := serveEnv()
+	env["KURA_OAUTH_REDIRECT_URL"] = "https://gateway.example/proxy/oauth/callback"
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	authURL := cfg.Google.AuthCodeURL("state")
+	if !strings.Contains(authURL, "redirect_uri=https%3A%2F%2Fgateway.example%2Fproxy%2Foauth%2Fcallback") {
+		t.Errorf("AuthCodeURL = %q does not carry the overridden redirect_uri", authURL)
+	}
+}
+
+// With KURA_OAUTH_REDIRECT_URL unset, the redirect URL is derived from
+// KURA_PUBLIC_URL — the existing default — so an operator who does not
+// terminate at a non-Kura path does not have to set it.
+func TestServeConfigOAuthRedirectURLDefault(t *testing.T) {
+	env := serveEnv()
+	delete(env, "KURA_OAUTH_REDIRECT_URL")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	authURL := cfg.Google.AuthCodeURL("state")
+	if !strings.Contains(authURL, "redirect_uri=https%3A%2F%2Fkura.client.example%2Foauth%2Fcallback") {
+		t.Errorf("AuthCodeURL = %q does not derive redirect_uri from KURA_PUBLIC_URL", authURL)
 	}
 }
 
