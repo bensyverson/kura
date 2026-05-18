@@ -52,7 +52,7 @@ type claims struct {
 	Type   PrincipalType `json:"typ"`
 	ID     string        `json:"sub"`
 	Email  string        `json:"email,omitempty"`
-	Domain string        `json:"domain,omitempty"`
+	Tenant string        `json:"tenant,omitempty"`
 	Iat    int64         `json:"iat"`
 	Exp    int64         `json:"exp"`
 }
@@ -69,7 +69,7 @@ func (a *Authenticator) Issue(p Principal, ttl time.Duration) (string, error) {
 		Type:   p.Type,
 		ID:     p.ID,
 		Email:  p.Email,
-		Domain: p.Domain,
+		Tenant: p.Tenant,
 		Iat:    now.Unix(),
 		Exp:    now.Add(ttl).Unix(),
 	})
@@ -115,7 +115,7 @@ func (a *Authenticator) Resolve(raw string) (Principal, error) {
 	if a.now().Unix() >= c.Exp {
 		return Principal{}, ErrTokenExpired
 	}
-	return Principal{Type: c.Type, ID: c.ID, Email: c.Email, Domain: c.Domain}, nil
+	return Principal{Type: c.Type, ID: c.ID, Email: c.Email, Tenant: c.Tenant}, nil
 }
 
 // sign returns the HMAC-SHA256 of body under the signing secret.

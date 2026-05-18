@@ -44,8 +44,8 @@ func (t PrincipalType) CedarEntityType() string {
 }
 
 // isHuman reports whether t is a human principal (as opposed to a
-// non-human service principal). Human principals authenticate against a
-// Workspace domain and so always carry an email and a domain.
+// non-human service principal). Human principals authenticate via an
+// IdP and so always carry an email and a tenant identifier.
 func (t PrincipalType) isHuman() bool {
 	return t == PrincipalUser || t == PrincipalAdmin || t == PrincipalConsultant
 }
@@ -58,9 +58,11 @@ type Principal struct {
 	// principal it is the email; for a service principal it is the
 	// service name.
 	ID string
-	// Email and Domain are populated for human principals only.
+	// Email and Tenant are populated for human principals only. Tenant
+	// is the IdP tenant identifier (e.g. a Workspace domain, an Entra
+	// tenant ID, or an Okta org).
 	Email  string
-	Domain string
+	Tenant string
 }
 
 // Valid reports whether p is a well-formed principal, naming the first
@@ -76,8 +78,8 @@ func (p Principal) Valid() error {
 		if p.Email == "" {
 			return fmt.Errorf("identity: %s principal %q must carry an email", p.Type, p.ID)
 		}
-		if p.Domain == "" {
-			return fmt.Errorf("identity: %s principal %q must carry a domain", p.Type, p.ID)
+		if p.Tenant == "" {
+			return fmt.Errorf("identity: %s principal %q must carry a tenant", p.Type, p.ID)
 		}
 	}
 	return nil

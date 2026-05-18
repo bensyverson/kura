@@ -66,7 +66,7 @@ func adminServer(t *testing.T) (srv *Server, users *data.MemUserStore, idp *iden
 	}
 
 	mint := func(email string, typ identity.PrincipalType) string {
-		tok, err := auth.Issue(identity.Principal{Type: typ, ID: email, Email: email, Domain: "client.com"}, time.Hour)
+		tok, err := auth.Issue(identity.Principal{Type: typ, ID: email, Email: email, Tenant: "client.com"}, time.Hour)
 		if err != nil {
 			t.Fatalf("issuing token for %s: %v", email, err)
 		}
@@ -162,7 +162,7 @@ func TestAssignAndRevokeRolesVariadic(t *testing.T) {
 	if rec.status != http.StatusOK && rec.status != http.StatusNoContent {
 		t.Fatalf("assign roles: status = %d, want 200/204; body %s", rec.status, rec.body.String())
 	}
-	roles, _ := users.Roles(t.Context(), identity.Principal{Type: identity.PrincipalUser, ID: "new@client.com", Email: "new@client.com", Domain: "client.com"})
+	roles, _ := users.Roles(t.Context(), identity.Principal{Type: identity.PrincipalUser, ID: "new@client.com", Email: "new@client.com", Tenant: "client.com"})
 	if len(roles) != 2 {
 		t.Errorf("after assign, roles = %v, want 2", roles)
 	}
@@ -171,7 +171,7 @@ func TestAssignAndRevokeRolesVariadic(t *testing.T) {
 	if rec.status != http.StatusOK && rec.status != http.StatusNoContent {
 		t.Fatalf("revoke roles: status = %d, want 200/204", rec.status)
 	}
-	roles, _ = users.Roles(t.Context(), identity.Principal{Type: identity.PrincipalUser, ID: "new@client.com", Email: "new@client.com", Domain: "client.com"})
+	roles, _ = users.Roles(t.Context(), identity.Principal{Type: identity.PrincipalUser, ID: "new@client.com", Email: "new@client.com", Tenant: "client.com"})
 	if len(roles) != 1 || roles[0] != "auditor" {
 		t.Errorf("after revoke, roles = %v, want [auditor]", roles)
 	}

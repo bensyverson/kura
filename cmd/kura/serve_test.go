@@ -67,8 +67,8 @@ func TestServeConfigWiresAcceptableConfig(t *testing.T) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil || cfg.Gate == nil {
 		t.Error("serveConfig left a required enforcement collaborator nil")
 	}
-	if cfg.Trust.FirmDomain != "examplefirm.com" {
-		t.Errorf("Trust.FirmDomain = %q, want examplefirm.com", cfg.Trust.FirmDomain)
+	if cfg.Trust.FirmTenant != "examplefirm.com" {
+		t.Errorf("Trust.FirmTenant = %q, want examplefirm.com", cfg.Trust.FirmTenant)
 	}
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("serveConfig with a complete environment: %v", err)

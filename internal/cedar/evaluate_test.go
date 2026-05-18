@@ -18,7 +18,7 @@ func testEvaluator(t *testing.T) *Evaluator {
 }
 
 func principal(id string) identity.Principal {
-	return identity.Principal{Type: identity.PrincipalUser, ID: id, Email: id, Domain: "client.com"}
+	return identity.Principal{Type: identity.PrincipalUser, ID: id, Email: id, Tenant: "client.com"}
 }
 
 func contains(cs []pii.Category, want pii.Category) bool {

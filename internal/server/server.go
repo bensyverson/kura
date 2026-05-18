@@ -60,7 +60,7 @@ type Config struct {
 	// it. Required.
 	Recorder *audit.Recorder
 	// Google performs the Google side of the OAuth flow. Required.
-	Google GoogleAuthenticator
+	Google IdentityProvider
 	// Gate is the core enforcement entrypoint. Every data route is a thin
 	// binding over Gate.Access or Gate.List — the server holds no other
 	// way to read a record. Required.
@@ -91,9 +91,9 @@ type Config struct {
 	// endpoint is still mounted in that case — it answers 503, a reported
 	// "unavailable", rather than vanishing into a 404.
 	LLM *llm.Gateway
-	// Trust maps a verified Workspace domain to a Kura principal type. A
-	// zero Trust trusts no domain — fail-closed, but useless.
-	Trust identity.DomainTrust
+	// Trust maps a verified IdP tenant to a Kura principal type. A
+	// zero Trust trusts no tenant — fail-closed, but useless.
+	Trust identity.TenantTrust
 	// TokenTTL is the lifetime of tokens minted at the OAuth callback.
 	// Defaults to 12h.
 	TokenTTL time.Duration

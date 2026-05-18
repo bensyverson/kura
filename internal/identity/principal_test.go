@@ -1,6 +1,9 @@
 package identity
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // Principal types map to the Cedar entity types recorded in the Phase 0
 // consultant-auth decision (docs/concepts/identity.md).
@@ -34,8 +37,8 @@ func TestUnknownPrincipalTypeIsInvalid(t *testing.T) {
 
 func TestPrincipalValidation(t *testing.T) {
 	valid := []Principal{
-		{Type: PrincipalUser, ID: "alice@client.com", Email: "alice@client.com", Domain: "client.com"},
-		{Type: PrincipalConsultant, ID: "alex@firm.com", Email: "alex@firm.com", Domain: "firm.com"},
+		{Type: PrincipalUser, ID: "alice@client.com", Email: "alice@client.com", Tenant: "client.com"},
+		{Type: PrincipalConsultant, ID: "alex@firm.com", Email: "alex@firm.com", Tenant: "firm.com"},
 		{Type: PrincipalService, ID: "ingest-worker"},
 	}
 	for _, p := range valid {
@@ -47,12 +50,28 @@ func TestPrincipalValidation(t *testing.T) {
 	invalid := []Principal{
 		{Type: "bogus", ID: "x"},
 		{Type: PrincipalUser, ID: ""},
-		{Type: PrincipalUser, ID: "alice", Domain: "client.com"},   // human, no email
-		{Type: PrincipalAdmin, ID: "bob", Email: "bob@client.com"}, // human, no domain
+		{Type: PrincipalUser, ID: "alice", Tenant: "client.com"},   // human, no email
+		{Type: PrincipalAdmin, ID: "bob", Email: "bob@client.com"}, // human, no tenant
 	}
 	for _, p := range invalid {
 		if err := p.Valid(); err == nil {
 			t.Errorf("invalid principal %+v was accepted", p)
 		}
+	}
+}
+
+// Human-principal validation errors should name the missing field in the
+// new (IdP-agnostic) vocabulary: "tenant", not "domain".
+func TestPrincipalValidationErrorsUseTenantVocabulary(t *testing.T) {
+	p := Principal{Type: PrincipalAdmin, ID: "bob", Email: "bob@client.com"}
+	err := p.Valid()
+	if err == nil {
+		t.Fatalf("expected validation error, got nil")
+	}
+	if !strings.Contains(err.Error(), "tenant") {
+		t.Errorf("error %q should mention %q", err.Error(), "tenant")
+	}
+	if strings.Contains(err.Error(), "domain") {
+		t.Errorf("error %q should no longer mention %q", err.Error(), "domain")
 	}
 }

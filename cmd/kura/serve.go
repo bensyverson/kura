@@ -116,7 +116,7 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 
-	google := server.NewGoogleAuthenticator(server.GoogleConfig{
+	google := server.NewGoogleIdP(server.GoogleConfig{
 		ClientID:     clientID,
 		ClientSecret: clientSecret,
 		RedirectURL:  strings.TrimRight(publicURL, "/") + "/oauth/callback",
@@ -166,9 +166,9 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// Directory client is its own build-plan task. Until it lands,
 		// IdP-mismatch detection reports no mismatches.
 		IdP: identity.NewFakeIdPDirectory(),
-		Trust: identity.DomainTrust{
-			FirmDomain:    firmDomain,
-			ClientDomains: splitList(getenv("KURA_CLIENT_DOMAINS")),
+		Trust: identity.TenantTrust{
+			FirmTenant:    firmDomain,
+			ClientTenants: splitList(getenv("KURA_CLIENT_DOMAINS")),
 			AdminEmails:   splitList(getenv("KURA_ADMIN_EMAILS")),
 		},
 	}, nil

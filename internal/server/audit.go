@@ -50,7 +50,7 @@ type auditActorJSON struct {
 	Type   string `json:"type,omitempty"`
 	ID     string `json:"id,omitempty"`
 	Email  string `json:"email,omitempty"`
-	Domain string `json:"domain,omitempty"`
+	Tenant string `json:"tenant,omitempty"`
 }
 
 // auditResourceJSON is the wire shape of an event's resource — an entity
@@ -70,7 +70,7 @@ func toAuditEventJSON(e audit.Event) auditEventJSON {
 			Type:   string(e.Actor.Type),
 			ID:     e.Actor.ID,
 			Email:  e.Actor.Email,
-			Domain: e.Actor.Domain,
+			Tenant: e.Actor.Tenant,
 		},
 		Action:   e.Action,
 		Resource: auditResourceJSON{Entity: e.Resource.Entity, ID: e.Resource.ID},

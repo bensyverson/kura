@@ -138,7 +138,7 @@ func TestValidTokenPassesAuthGate(t *testing.T) {
 		Type:   identity.PrincipalConsultant,
 		ID:     "alex@examplefirm.com",
 		Email:  "alex@examplefirm.com",
-		Domain: "examplefirm.com",
+		Tenant: "examplefirm.com",
 	}, time.Hour)
 	if err != nil {
 		t.Fatalf("issuing token: %v", err)

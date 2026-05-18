@@ -26,7 +26,7 @@ func discardLogger() *slog.Logger {
 // logic is testable without a live Workspace domain.
 type fakeGoogle struct {
 	consentURL  string
-	identity    WorkspaceIdentity
+	identity    VerifiedIdentity
 	exchangeErr error
 }
 
@@ -34,24 +34,24 @@ func (f *fakeGoogle) AuthCodeURL(state string) string {
 	return f.consentURL + "?state=" + url.QueryEscape(state)
 }
 
-func (f *fakeGoogle) Exchange(_ context.Context, _ string) (WorkspaceIdentity, error) {
+func (f *fakeGoogle) Exchange(_ context.Context, _ string) (VerifiedIdentity, error) {
 	if f.exchangeErr != nil {
-		return WorkspaceIdentity{}, f.exchangeErr
+		return VerifiedIdentity{}, f.exchangeErr
 	}
 	return f.identity, nil
 }
 
-func testTrust() identity.DomainTrust {
-	return identity.DomainTrust{
-		FirmDomain:    "examplefirm.com",
-		ClientDomains: []string{"client.example"},
+func testTrust() identity.TenantTrust {
+	return identity.TenantTrust{
+		FirmTenant:    "examplefirm.com",
+		ClientTenants: []string{"client.example"},
 		AdminEmails:   []string{"boss@client.example"},
 	}
 }
 
 // oauthFixture wires an oauthHandler over fakes and returns the handler
 // plus the collaborators a test needs to inspect.
-func oauthFixture(t *testing.T, g GoogleAuthenticator) (*oauthHandler, *identity.Authenticator, *audit.MemStore) {
+func oauthFixture(t *testing.T, g IdentityProvider) (*oauthHandler, *identity.Authenticator, *audit.MemStore) {
 	t.Helper()
 	auth := identity.NewAuthenticator([]byte("test-signing-secret"))
 	store := audit.NewMemStore()
@@ -126,7 +126,7 @@ func TestOAuthLoginRequiresRedirect(t *testing.T) {
 // verified domain to a principal, mints a Kura token, records the
 // authentication, and hands the token back to the CLI's loopback URL.
 func TestOAuthCallbackMintsTokenAndRedirectsToLoopback(t *testing.T) {
-	g := &fakeGoogle{identity: WorkspaceIdentity{Email: "alex@examplefirm.com", Domain: "examplefirm.com"}}
+	g := &fakeGoogle{identity: VerifiedIdentity{Email: "alex@examplefirm.com", Tenant: "examplefirm.com", Issuer: "https://accounts.google.com"}}
 	h, auth, store := oauthFixture(t, g)
 
 	h.states.put("server-state", "http://127.0.0.1:5555/callback?state=cli-state")
@@ -165,7 +165,7 @@ func TestOAuthCallbackMintsTokenAndRedirectsToLoopback(t *testing.T) {
 // A callback whose state is unknown (forged, or already consumed) yields
 // no token.
 func TestOAuthCallbackRejectsUnknownState(t *testing.T) {
-	g := &fakeGoogle{identity: WorkspaceIdentity{Email: "alex@examplefirm.com", Domain: "examplefirm.com"}}
+	g := &fakeGoogle{identity: VerifiedIdentity{Email: "alex@examplefirm.com", Tenant: "examplefirm.com", Issuer: "https://accounts.google.com"}}
 	h, _, _ := oauthFixture(t, g)
 
 	req := httptest.NewRequest(http.MethodGet, "/oauth/callback?code=good-code&state=never-issued", nil)
@@ -180,7 +180,7 @@ func TestOAuthCallbackRejectsUnknownState(t *testing.T) {
 // State is single-use: a replayed callback for an already-consumed state
 // is rejected.
 func TestOAuthCallbackStateIsSingleUse(t *testing.T) {
-	g := &fakeGoogle{identity: WorkspaceIdentity{Email: "alex@examplefirm.com", Domain: "examplefirm.com"}}
+	g := &fakeGoogle{identity: VerifiedIdentity{Email: "alex@examplefirm.com", Tenant: "examplefirm.com", Issuer: "https://accounts.google.com"}}
 	h, _, _ := oauthFixture(t, g)
 
 	h.states.put("server-state", "http://127.0.0.1:5555/callback")
@@ -195,10 +195,10 @@ func TestOAuthCallbackStateIsSingleUse(t *testing.T) {
 	}
 }
 
-// A verified identity on a domain the deployment does not trust gets no
+// A verified identity on a tenant the deployment does not trust gets no
 // token, and the failed authentication is recorded.
-func TestOAuthCallbackRejectsUntrustedDomain(t *testing.T) {
-	g := &fakeGoogle{identity: WorkspaceIdentity{Email: "mallory@evil.example", Domain: "evil.example"}}
+func TestOAuthCallbackRejectsUntrustedTenant(t *testing.T) {
+	g := &fakeGoogle{identity: VerifiedIdentity{Email: "mallory@evil.example", Tenant: "evil.example", Issuer: "https://accounts.google.com"}}
 	h, _, store := oauthFixture(t, g)
 
 	h.states.put("server-state", "http://127.0.0.1:5555/callback")
@@ -207,7 +207,7 @@ func TestOAuthCallbackRejectsUntrustedDomain(t *testing.T) {
 	h.callback(rec, req)
 
 	if rec.Code == http.StatusFound {
-		t.Errorf("untrusted domain was issued a token (Location %q)", rec.Header().Get("Location"))
+		t.Errorf("untrusted tenant was issued a token (Location %q)", rec.Header().Get("Location"))
 	}
 	events, _ := store.Query(context.Background(), audit.Filter{})
 	if len(events) != 1 || events[0].Kind != audit.KindAuthentication || events[0].Outcome != audit.OutcomeDenied {

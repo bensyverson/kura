@@ -14,7 +14,7 @@ func testActor() identity.Principal {
 		Type:   identity.PrincipalUser,
 		ID:     "alice@client.com",
 		Email:  "alice@client.com",
-		Domain: "client.com",
+		Tenant: "client.com",
 	}
 }
 
@@ -141,8 +141,8 @@ func TestAuthnAndAuthzLoggedDistinctly(t *testing.T) {
 func TestQueryByActorResourceAction(t *testing.T) {
 	store := NewMemStore()
 	ctx := context.Background()
-	alice := identity.Principal{Type: identity.PrincipalUser, ID: "alice@c.com", Email: "alice@c.com", Domain: "c.com"}
-	bob := identity.Principal{Type: identity.PrincipalAdmin, ID: "bob@c.com", Email: "bob@c.com", Domain: "c.com"}
+	alice := identity.Principal{Type: identity.PrincipalUser, ID: "alice@c.com", Email: "alice@c.com", Tenant: "c.com"}
+	bob := identity.Principal{Type: identity.PrincipalAdmin, ID: "bob@c.com", Email: "bob@c.com", Tenant: "c.com"}
 
 	base := time.Date(2026, 5, 14, 9, 0, 0, 0, time.UTC)
 	must := func(e Event) {

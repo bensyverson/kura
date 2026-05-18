@@ -27,7 +27,7 @@ func llmServer(t *testing.T, gateway *llm.Gateway) (srv *Server, token string) {
 		Type:   identity.PrincipalConsultant,
 		ID:     "alex@examplefirm.com",
 		Email:  "alex@examplefirm.com",
-		Domain: "examplefirm.com",
+		Tenant: "examplefirm.com",
 	}, time.Hour)
 	if err != nil {
 		t.Fatalf("issuing token: %v", err)

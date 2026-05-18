@@ -10,7 +10,7 @@ import (
 )
 
 func human(email string) identity.Principal {
-	return identity.Principal{Type: identity.PrincipalUser, ID: email, Email: email, Domain: "client.com"}
+	return identity.Principal{Type: identity.PrincipalUser, ID: email, Email: email, Tenant: "client.com"}
 }
 
 func TestMemUserStoreAddAndList(t *testing.T) {

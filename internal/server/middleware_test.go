@@ -37,7 +37,7 @@ func authFixture(t *testing.T) (*identity.Authenticator, *audit.MemStore, string
 		Type:   identity.PrincipalConsultant,
 		ID:     "alex@examplefirm.com",
 		Email:  "alex@examplefirm.com",
-		Domain: "examplefirm.com",
+		Tenant: "examplefirm.com",
 	}, time.Hour)
 	if err != nil {
 		t.Fatalf("issuing test token: %v", err)
@@ -102,7 +102,7 @@ func TestRequireAuthRejectsExpiredToken(t *testing.T) {
 		Type:   identity.PrincipalConsultant,
 		ID:     "alex@examplefirm.com",
 		Email:  "alex@examplefirm.com",
-		Domain: "examplefirm.com",
+		Tenant: "examplefirm.com",
 	}, -time.Minute)
 	if err != nil {
 		t.Fatalf("issuing expired token: %v", err)

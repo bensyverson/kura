@@ -12,7 +12,7 @@ func testAuth() *Authenticator {
 
 func TestTokenRoundTrip(t *testing.T) {
 	a := testAuth()
-	p := Principal{Type: PrincipalConsultant, ID: "alex@firm.com", Email: "alex@firm.com", Domain: "firm.com"}
+	p := Principal{Type: PrincipalConsultant, ID: "alex@firm.com", Email: "alex@firm.com", Tenant: "firm.com"}
 
 	tok, err := a.Issue(p, time.Hour)
 	if err != nil {
@@ -32,7 +32,7 @@ func TestResolveRejectsExpiredToken(t *testing.T) {
 	base := time.Date(2026, 5, 14, 12, 0, 0, 0, time.UTC)
 	a.now = func() time.Time { return base }
 
-	tok, err := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Domain: "c.com"}, 15*time.Minute)
+	tok, err := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Tenant: "c.com"}, 15*time.Minute)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestResolveRejectsExpiredToken(t *testing.T) {
 
 func TestResolveRejectsTamperedToken(t *testing.T) {
 	a := testAuth()
-	tok, _ := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Domain: "c.com"}, time.Hour)
+	tok, _ := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Tenant: "c.com"}, time.Hour)
 
 	tampered := tok[:len(tok)-2] + "xx"
 	if _, err := a.Resolve(tampered); !errors.Is(err, ErrTokenInvalid) {
@@ -55,7 +55,7 @@ func TestResolveRejectsTamperedToken(t *testing.T) {
 
 func TestResolveRejectsWrongSecret(t *testing.T) {
 	a := testAuth()
-	tok, _ := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Domain: "c.com"}, time.Hour)
+	tok, _ := a.Issue(Principal{Type: PrincipalUser, ID: "u@c.com", Email: "u@c.com", Tenant: "c.com"}, time.Hour)
 
 	other := NewAuthenticator([]byte("an-entirely-different-signing-secret"))
 	if _, err := other.Resolve(tok); !errors.Is(err, ErrTokenInvalid) {

@@ -18,23 +18,20 @@ import (
 // between /oauth/login and /oauth/callback before its state expires.
 const defaultStateTTL = 10 * time.Minute
 
-// WorkspaceIdentity is a verified Google Workspace identity: the email
-// and the `hd` hosted-domain claim, taken from a validated id_token. It
-// is what the OAuth layer hands to DomainTrust to resolve a principal.
-type WorkspaceIdentity struct {
+// VerifiedIdentity is a verified end-user identity returned by an IdP
+// authenticator: the email, the IdP tenant identifier the identity
+// belongs to, and the OIDC issuer URL it was verified against. It is
+// what the OAuth layer hands to TenantTrust to resolve a principal.
+//
+// Issuer is the canonical OIDC issuer URL — for example
+// https://accounts.google.com, https://login.microsoftonline.com/<tid>/v2.0,
+// or a self-hosted OIDC provider URL. It carries through to the audit
+// log and lets a generic-OIDC deployment use the issuer as the tenant
+// key when the IdP supplies no separate tenant claim.
+type VerifiedIdentity struct {
 	Email  string
-	Domain string
-}
-
-// GoogleAuthenticator is the seam over the Google side of the OAuth
-// flow. The real implementation builds the consent URL, exchanges the
-// auth code, and verifies the id_token; a fake stands in for it in tests
-// so the handler logic is testable without a live Workspace domain.
-type GoogleAuthenticator interface {
-	// AuthCodeURL returns the Google consent-screen URL for state.
-	AuthCodeURL(state string) string
-	// Exchange swaps an auth code for a verified Workspace identity.
-	Exchange(ctx context.Context, code string) (WorkspaceIdentity, error)
+	Tenant string
+	Issuer string
 }
 
 // loginState is one in-flight login: the CLI loopback URL the minted
@@ -87,13 +84,13 @@ func (s *stateStore) take(state string) (string, bool) {
 }
 
 // oauthHandler serves the two public OAuth endpoints: /oauth/login,
-// which sends the browser to Google, and /oauth/callback, which Google
-// redirects back to. The callback is the only point that mints a Kura
-// token — it does so only after a verified identity resolves to a
-// trusted principal.
+// which sends the browser to the configured IdP, and /oauth/callback,
+// which the IdP redirects back to. The callback is the only point that
+// mints a Kura token — it does so only after a verified identity
+// resolves to a trusted principal.
 type oauthHandler struct {
-	google   GoogleAuthenticator
-	trust    identity.DomainTrust
+	idp      IdentityProvider
+	trust    identity.TenantTrust
 	auth     *identity.Authenticator
 	recorder *audit.Recorder
 	states   *stateStore
@@ -103,9 +100,9 @@ type oauthHandler struct {
 
 // newOAuthHandler assembles an oauthHandler. tokenTTL is the lifetime of
 // the Kura tokens it mints.
-func newOAuthHandler(g GoogleAuthenticator, trust identity.DomainTrust, auth *identity.Authenticator, rec *audit.Recorder, tokenTTL time.Duration, logger *slog.Logger) *oauthHandler {
+func newOAuthHandler(idp IdentityProvider, trust identity.TenantTrust, auth *identity.Authenticator, rec *audit.Recorder, tokenTTL time.Duration, logger *slog.Logger) *oauthHandler {
 	return &oauthHandler{
-		google:   g,
+		idp:      idp,
 		trust:    trust,
 		auth:     auth,
 		recorder: rec,
@@ -136,7 +133,7 @@ func (h *oauthHandler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.states.put(state, redirect)
-	http.Redirect(w, r, h.google.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, h.idp.AuthCodeURL(state), http.StatusFound)
 }
 
 // callback completes the flow. Google redirects the browser here with a
@@ -158,13 +155,13 @@ func (h *oauthHandler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	wid, err := h.google.Exchange(ctx, q.Get("code"))
+	wid, err := h.idp.Exchange(ctx, q.Get("code"))
 	if err != nil {
 		h.denyAuthentication(ctx, w, "code exchange failed", err)
 		return
 	}
 
-	principal, err := h.trust.Principal(wid.Email, wid.Domain)
+	principal, err := h.trust.Principal(wid.Email, wid.Tenant)
 	if err != nil {
 		h.denyAuthentication(ctx, w, "untrusted identity", err)
 		return

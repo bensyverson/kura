@@ -70,7 +70,7 @@ func auditServer(t *testing.T) (srv *Server, store *audit.MemStore, adminTok, au
 	}
 
 	mint := func(email string) string {
-		tok, err := auth.Issue(identity.Principal{Type: identity.PrincipalUser, ID: email, Email: email, Domain: "client.com"}, time.Hour)
+		tok, err := auth.Issue(identity.Principal{Type: identity.PrincipalUser, ID: email, Email: email, Tenant: "client.com"}, time.Hour)
 		if err != nil {
 			t.Fatalf("issuing token for %s: %v", email, err)
 		}
