@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
@@ -97,6 +98,46 @@ func TestOIDCIdPPropagatesVerifierError(t *testing.T) {
 	}
 	if !errors.Is(err, boom) {
 		t.Errorf("error chain should wrap the verifier's error, got %v", err)
+	}
+}
+
+// On an email_verified=false rejection, the error must carry the
+// id_token's decoded claims so an operator can diagnose which user
+// signed in and which claims the IdP actually emitted. The Zitadel
+// smoke surfaced this need: without the dump, "email_verified=false"
+// reads identically whether the user is unverified, signed in as the
+// wrong account, or the IdP simply omitted the email scope.
+func TestOIDCIdPEmbedsClaimsInRejectionError(t *testing.T) {
+	payload := `{"iss":"https://auth.examplefirm.com","sub":"unverified-user","email":"alex@examplefirm.com","email_verified":false}`
+	encoded := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	rawJWT := "header." + encoded + ".signature"
+
+	v := &fakeOIDCVerifier{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: false,
+	}}
+	idp := &oidcIdP{issuerURL: "https://auth.examplefirm.com", verifier: v}
+	_, err := idp.verifyAndMap(context.Background(), rawJWT)
+	if err == nil {
+		t.Fatal("expected rejection")
+	}
+	if !strings.Contains(err.Error(), payload) {
+		t.Errorf("error %q does not embed the decoded JWT payload — operator cannot see what claims the IdP sent", err.Error())
+	}
+}
+
+// decodeJWTPayloadForDebug returns a stable placeholder for inputs
+// that are not a real JWT — diagnostics must not shadow the
+// underlying problem with their own panic or error.
+func TestDecodeJWTPayloadForDebugHandlesMalformed(t *testing.T) {
+	for _, raw := range []string{"", "not-a-jwt", "only.two", "header.@@@notbase64@@@.sig"} {
+		got := decodeJWTPayloadForDebug(raw)
+		if got == "" {
+			t.Errorf("decodeJWTPayloadForDebug(%q) returned an empty string — must always return a placeholder", raw)
+		}
+		if strings.HasPrefix(got, "{") {
+			t.Errorf("decodeJWTPayloadForDebug(%q) = %q, must not look like real claims for malformed input", raw, got)
+		}
 	}
 }
 

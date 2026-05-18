@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
@@ -129,7 +130,7 @@ func (o *oidcIdP) verifyAndMap(ctx context.Context, rawIDToken string) (Verified
 		return VerifiedIdentity{}, fmt.Errorf("server: verifying oidc id_token: %w", err)
 	}
 	if !c.EmailVerified {
-		return VerifiedIdentity{}, fmt.Errorf("server: oidc id_token has email_verified=false")
+		return VerifiedIdentity{}, fmt.Errorf("server: oidc id_token has email_verified=false (raw claims: %s)", decodeJWTPayloadForDebug(rawIDToken))
 	}
 	if c.Email == "" {
 		return VerifiedIdentity{}, fmt.Errorf("server: oidc id_token has no email claim")
@@ -139,4 +140,22 @@ func (o *oidcIdP) verifyAndMap(ctx context.Context, rawIDToken string) (Verified
 		Tenant: o.issuerURL,
 		Issuer: o.issuerURL,
 	}, nil
+}
+
+// decodeJWTPayloadForDebug returns the JWT payload section of a JWS as
+// a UTF-8 string for diagnostic embedding in error messages. The
+// signature has already been verified by the time this is called; this
+// is decode-for-display, not decode-for-trust. On any malformed input
+// it returns a placeholder rather than an error — diagnostics must not
+// shadow the underlying problem.
+func decodeJWTPayloadForDebug(raw string) string {
+	parts := strings.Split(raw, ".")
+	if len(parts) < 2 {
+		return "<not a JWT>"
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "<unparseable payload>"
+	}
+	return string(payload)
 }

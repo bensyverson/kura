@@ -5,11 +5,11 @@
 #   docker compose -f scripts/oidc-dev/docker-compose.zitadel.yml up -d
 #
 # Console:    http://localhost:8086/ui/console
-# Bootstrap:  Zitadel prints a one-time admin login (username
-#             zitadel-admin@<instance>.localhost, generated password)
-#             into the container logs on first start. Tail it with:
-#
-#               docker logs -f kura-zitadel | grep -E 'username|password'
+# Admin:      zitadel-admin@zitadel.localhost / Password1!
+#             (set deterministically via ZITADEL_FIRSTINSTANCE_*
+#             below; password-change-on-first-login is disabled so the
+#             credentials remain stable across rebuilds — this is a dev
+#             stack, never run it on a network anyone can reach)
 #
 # Issuer URL once running:
 #
@@ -53,6 +53,14 @@ services:
       ZITADEL_EXTERNALPORT: 8086
       ZITADEL_PORT: 8080
       ZITADEL_TLS_ENABLED: "false"
+      # Lock the bootstrap admin credentials so a wipe-and-restart of
+      # this dev stack does not force you to chase a temporary
+      # password. Never use this admin in any non-dev context.
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_USERNAME: zitadel-admin
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ADDRESS: zitadel-admin@zitadel.localhost
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_EMAIL_ISVERIFIED: "true"
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORD: Password1!
+      ZITADEL_FIRSTINSTANCE_ORG_HUMAN_PASSWORDCHANGEREQUIRED: "false"
     ports:
       - "127.0.0.1:8086:8080"
     depends_on:

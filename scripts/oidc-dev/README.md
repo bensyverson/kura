@@ -73,26 +73,39 @@ docker compose -f scripts/oidc-dev/docker-compose.keycloak.yml down -v
 
 ## Zitadel
 
-Zitadel's first start prints a one-time admin login into the container
-logs. App registration is a click-through in the Console — there is no
-realm-import equivalent.
+App registration is a click-through in the Console — there is no
+realm-import equivalent. The compose file pins the bootstrap admin
+credentials (no rotating temporary password to chase) so a
+wipe-and-restart cycle is cheap.
 
 ```sh
 docker compose -f scripts/oidc-dev/docker-compose.zitadel.yml up -d
-docker logs -f kura-zitadel | grep -E 'username|password'
 ```
+
+Admin (dev-only): `zitadel-admin@zitadel.localhost` / `Password1!`.
 
 Then in the Console at <http://localhost:8086/ui/console>:
 
-1. Sign in with the printed admin credentials.
+1. Sign in with the admin credentials above.
 2. **Projects → Create New Project** → name it `kura`.
 3. **New Application → Web**, "CODE" flow, "POST" auth method (this
    selects `client_secret_post`, which `coreos/go-oidc` handles).
 4. **Redirect URIs**: `http://127.0.0.1:8080/oauth/callback`.
-5. After creation, copy the **ClientID** and **ClientSecret**.
-6. Create a human user under **Users**; **mark the email as verified**
-   (Zitadel-side action) — Kura rejects an `id_token` whose
-   `email_verified` claim is false.
+5. **Development Mode: ON** (relaxes the HTTPS-only validation so
+   Zitadel accepts the `http://127.0.0.1:...` redirect URI). Do *not*
+   leave this on in production.
+6. After creation, open the new app → **Token Settings**, and turn
+   **"User Info inside ID Token" ON**. Zitadel defaults to a minimal
+   id_token (no `email` / `email_verified` claims), and Kura reads
+   identity from the id_token rather than the userinfo endpoint, so
+   without this toggle every sign-in fails with
+   `email_verified=false`.
+7. Copy the **ClientID** and **ClientSecret**.
+8. Create a human user under **Users**; **mark the email as verified**
+   (Zitadel-side action — the per-user verify button on the email
+   field, not the registration-side verify-on-signup flow). Kura
+   rejects an `id_token` whose `email_verified` claim is false or
+   absent.
 
 Start Kura against it:
 
