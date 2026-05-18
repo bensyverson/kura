@@ -98,10 +98,11 @@ the same as for the Google IdP — for Microsoft, the **tenant key is
 the Entra Directory (tenant) ID**, not a domain. Put each accepted
 tenant ID in the trust list.
 
-> The `KURA_IDP` selector and the Microsoft-specific environment
-> variables are introduced in the Phase E config-plumbing task; until
-> that lands, `kura serve` still defaults to Google. The Entra-side
-> registration above is unchanged when the selector lands.
+> `KURA_IDP` accepts `google` (default) and `oidc` today; selection of
+> the Microsoft IdP family from `kura serve` lands with the Phase E
+> config-plumbing task. Until then, the Entra-side registration above
+> stands but `kura serve` will not yet wire `microsoft` from
+> `KURA_IDP`. The registration is unchanged when the selector lands.
 
 ## Verify
 

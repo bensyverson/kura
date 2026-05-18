@@ -1,0 +1,66 @@
+{
+  "realm": "kura",
+  "enabled": true,
+  "displayName": "Kura (dev)",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "verifyEmail": false,
+  "sslRequired": "none",
+  "users": [
+    {
+      "username": "alice",
+      "email": "alice@kura.test",
+      "emailVerified": true,
+      "enabled": true,
+      "firstName": "Alice",
+      "lastName": "Example",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "alice",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "default-roles-kura"
+      ]
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "kura",
+      "name": "Kura",
+      "description": "Kura serve — dev client. Confidential, code flow.",
+      "enabled": true,
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "kura-dev-secret",
+      "redirectUris": [
+        "http://127.0.0.1:8080/oauth/callback",
+        "http://localhost:8080/oauth/callback"
+      ],
+      "webOrigins": [
+        "http://127.0.0.1:8080",
+        "http://localhost:8080"
+      ],
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "fullScopeAllowed": true,
+      "attributes": {
+        "post.logout.redirect.uris": "http://127.0.0.1:8080/*"
+      },
+      "defaultClientScopes": [
+        "web-origins",
+        "profile",
+        "roles",
+        "email"
+      ]
+    }
+  ]
+}

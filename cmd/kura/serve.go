@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/cedar"
@@ -19,6 +20,11 @@ import (
 	"github.com/bensyverson/kura/internal/server"
 	"github.com/spf13/cobra"
 )
+
+// oidcDiscoveryTimeout bounds the OIDC discovery and JWKS fetch that
+// happen during serveConfig when KURA_IDP=oidc. An unreachable issuer
+// must fail the operator's startup quickly, not hang.
+const oidcDiscoveryTimeout = 15 * time.Second
 
 // defaultServeAddr binds loopback only. Caddy terminates TLS in front of
 // the server and proxies to it on the same host (Phase 6), so the server
@@ -39,8 +45,20 @@ func newServeCmd() *cobra.Command {
 Configuration is read from the environment:
 
   KURA_SIGNING_SECRET        secret for signing identity tokens (required)
-  KURA_GOOGLE_CLIENT_ID      Google OAuth client ID (required)
-  KURA_GOOGLE_CLIENT_SECRET  Google OAuth client secret (required)
+  KURA_IDP                   identity provider family: google (default) or
+                             oidc. Selects which set of IdP variables below
+                             are required.
+  KURA_GOOGLE_CLIENT_ID      Google OAuth client ID (required when
+                             KURA_IDP=google)
+  KURA_GOOGLE_CLIENT_SECRET  Google OAuth client secret (required when
+                             KURA_IDP=google)
+  KURA_OIDC_ISSUER_URL       OIDC issuer URL — discovery happens at
+                             <URL>/.well-known/openid-configuration
+                             (required when KURA_IDP=oidc)
+  KURA_OIDC_CLIENT_ID        OIDC client ID issued by the IdP (required
+                             when KURA_IDP=oidc)
+  KURA_OIDC_CLIENT_SECRET    OIDC client secret issued by the IdP
+                             (required when KURA_IDP=oidc)
   KURA_PUBLIC_URL            the server's public base URL, e.g.
                              https://kura.client.example (required)
   KURA_FIRM_DOMAIN           the consulting firm's Workspace domain;
@@ -95,14 +113,6 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	if err != nil {
 		return server.Config{}, err
 	}
-	clientID, err := required("KURA_GOOGLE_CLIENT_ID")
-	if err != nil {
-		return server.Config{}, err
-	}
-	clientSecret, err := required("KURA_GOOGLE_CLIENT_SECRET")
-	if err != nil {
-		return server.Config{}, err
-	}
 	publicURL, err := required("KURA_PUBLIC_URL")
 	if err != nil {
 		return server.Config{}, err
@@ -116,11 +126,10 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 
-	google := server.NewGoogleIdP(server.GoogleConfig{
-		ClientID:     clientID,
-		ClientSecret: clientSecret,
-		RedirectURL:  strings.TrimRight(publicURL, "/") + "/oauth/callback",
-	})
+	idp, err := buildIdP(getenv, publicURL)
+	if err != nil {
+		return server.Config{}, err
+	}
 
 	auth := identity.NewAuthenticator([]byte(secret))
 	// MemStore is the v1 audit backing for kura serve: the DB-backed
@@ -148,7 +157,7 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		Auth:     auth,
 		Recorder: recorder,
 		Audit:    auditStore,
-		Google:   google,
+		Google:   idp,
 		Gate:     g,
 		// LLM is optional: buildLLMGateway returns nil when the provider
 		// is not configured or its DPA is not on file, and the /api/llm
@@ -190,6 +199,72 @@ func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gat
 	}
 	scanner := pii.NewScanner(pii.NewServiceDetector(detectorURL))
 	return gate.New(auth, evaluator, roles, m, scanner, recorder)
+}
+
+// buildIdP picks an IdentityProvider implementation by KURA_IDP and
+// hydrates it from the corresponding family of environment variables.
+// The default (KURA_IDP unset or "google") is the Google IdP — the only
+// family that does not require network access at construction.
+//
+// "oidc" wires the generic OIDC IdP. Discovery and the JWKS fetch
+// happen here, so this branch makes a network call against
+// KURA_OIDC_ISSUER_URL bounded by oidcDiscoveryTimeout. An unreachable
+// issuer fails serve startup loudly rather than hanging.
+//
+// Microsoft Entra is a Phase E (yqMyY) task — the IdP implementation
+// (NewMicrosoftIdP) is ready, but selection from this dispatcher and
+// the matching docs land with that task.
+func buildIdP(getenv func(string) string, publicURL string) (server.IdentityProvider, error) {
+	redirectURL := strings.TrimRight(publicURL, "/") + "/oauth/callback"
+	kind := strings.ToLower(strings.TrimSpace(getenv("KURA_IDP")))
+	if kind == "" {
+		kind = "google"
+	}
+	required := func(key string) (string, error) {
+		if v := getenv(key); v != "" {
+			return v, nil
+		}
+		return "", fmt.Errorf("serve: required environment variable %s is not set", key)
+	}
+	switch kind {
+	case "google":
+		clientID, err := required("KURA_GOOGLE_CLIENT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientSecret, err := required("KURA_GOOGLE_CLIENT_SECRET")
+		if err != nil {
+			return nil, err
+		}
+		return server.NewGoogleIdP(server.GoogleConfig{
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			RedirectURL:  redirectURL,
+		}), nil
+	case "oidc":
+		issuerURL, err := required("KURA_OIDC_ISSUER_URL")
+		if err != nil {
+			return nil, err
+		}
+		clientID, err := required("KURA_OIDC_CLIENT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientSecret, err := required("KURA_OIDC_CLIENT_SECRET")
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+		defer cancel()
+		return server.NewOIDCIdP(ctx, server.OIDCConfig{
+			IssuerURL:    issuerURL,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+			RedirectURL:  redirectURL,
+		})
+	default:
+		return nil, fmt.Errorf("serve: KURA_IDP=%q is not a recognized identity provider (expected one of: google, oidc)", kind)
+	}
 }
 
 // buildLLMGateway assembles the core LLM gateway the /api/llm endpoint

@@ -1,0 +1,47 @@
+# Keycloak in development mode, pre-seeded with a "kura" realm and a
+# confidential OIDC client. Used to validate Kura's generic-OIDC IdP
+# against a real Keycloak instance end-to-end.
+#
+#   docker compose -f scripts/oidc-dev/docker-compose.keycloak.yml up
+#
+# Issuer URL once running:
+#
+#   http://localhost:8085/realms/kura
+#
+# Admin console:    http://localhost:8085/  (admin / admin)
+# Test user:        alice@kura.test / alice
+#
+# Bring up Kura against it with:
+#
+#   export KURA_IDP=oidc
+#   export KURA_OIDC_ISSUER_URL=http://localhost:8085/realms/kura
+#   export KURA_OIDC_CLIENT_ID=kura
+#   export KURA_OIDC_CLIENT_SECRET=kura-dev-secret
+#   export KURA_PUBLIC_URL=http://127.0.0.1:8080
+#   export KURA_FIRM_DOMAIN=http://localhost:8085/realms/kura
+#   ... (other Kura env)
+#   ./kura serve
+#
+# The realm sets emailVerified=true on the seeded user — Kura rejects
+# any OIDC id_token whose email_verified claim is false.
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.0
+    container_name: kura-keycloak
+    command:
+      - start-dev
+      - --import-realm
+      - --http-port=8080
+    environment:
+      KEYCLOAK_ADMIN: admin
+      KEYCLOAK_ADMIN_PASSWORD: admin
+    ports:
+      - "127.0.0.1:8085:8080"
+    volumes:
+      - ./keycloak-realm-kura.json:/opt/keycloak/data/import/realm-kura.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 && echo -e 'GET /realms/kura/.well-known/openid-configuration HTTP/1.0\\r\\n\\r\\n' >&3 && grep -q '200 OK' <&3"]
+      interval: 5s
+      timeout: 3s
+      retries: 30

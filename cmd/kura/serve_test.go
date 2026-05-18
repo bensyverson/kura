@@ -1,6 +1,12 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 // serveEnv is a complete set of the environment variables serveConfig
 // requires, for tests to start from and then perturb. It includes the
@@ -144,4 +150,176 @@ func TestServeCommandHasAddrFlag(t *testing.T) {
 	if addr.DefValue == "" {
 		t.Error("--addr flag has no default value")
 	}
+}
+
+// With KURA_IDP unset, serveConfig defaults to the Google IdP — the
+// existing behavior must continue to work without an explicit selector.
+func TestServeConfigDefaultsToGoogleIdP(t *testing.T) {
+	env := serveEnv()
+	delete(env, "KURA_IDP")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig with KURA_IDP unset: %v", err)
+	}
+	if cfg.Google == nil {
+		t.Error("serveConfig did not populate the IdP for the default selector")
+	}
+}
+
+// With KURA_IDP=google, serveConfig wires the Google IdP — explicit form
+// of the default.
+func TestServeConfigSelectsGoogleIdP(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "google"
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig with KURA_IDP=google: %v", err)
+	}
+	if cfg.Google == nil {
+		t.Error("serveConfig with KURA_IDP=google did not populate the IdP")
+	}
+}
+
+// An unrecognized KURA_IDP value must fail loudly. A typo here would
+// otherwise silently fall back to a default and serve a sign-in flow
+// the operator did not intend.
+func TestServeConfigRejectsUnknownIdP(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "banana"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=banana — must reject unknown identity providers")
+	}
+	if !strings.Contains(err.Error(), "KURA_IDP") {
+		t.Errorf("error %q does not mention KURA_IDP — operator will not know why it failed", err)
+	}
+}
+
+// With KURA_IDP=oidc, the generic-OIDC env vars take over: missing
+// KURA_OIDC_ISSUER_URL must fail before any network discovery is
+// attempted, so the operator sees a config error rather than a hung
+// startup.
+func TestServeConfigOIDCRequiresIssuerURL(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "oidc"
+	env["KURA_OIDC_CLIENT_ID"] = "kura"
+	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=oidc with no KURA_OIDC_ISSUER_URL")
+	}
+	if !strings.Contains(err.Error(), "KURA_OIDC_ISSUER_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=oidc, missing KURA_OIDC_CLIENT_ID must fail.
+func TestServeConfigOIDCRequiresClientID(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "oidc"
+	env["KURA_OIDC_ISSUER_URL"] = "https://issuer.example/"
+	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=oidc with no KURA_OIDC_CLIENT_ID")
+	}
+	if !strings.Contains(err.Error(), "KURA_OIDC_CLIENT_ID") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=oidc, missing KURA_OIDC_CLIENT_SECRET must fail.
+func TestServeConfigOIDCRequiresClientSecret(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "oidc"
+	env["KURA_OIDC_ISSUER_URL"] = "https://issuer.example/"
+	env["KURA_OIDC_CLIENT_ID"] = "kura"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_IDP=oidc with no KURA_OIDC_CLIENT_SECRET")
+	}
+	if !strings.Contains(err.Error(), "KURA_OIDC_CLIENT_SECRET") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_IDP=oidc, the Google client credentials are not required —
+// a deployment that signs in via OIDC must be able to run without ever
+// touching the Google environment variables.
+func TestServeConfigOIDCDoesNotRequireGoogleVars(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "oidc"
+	delete(env, "KURA_GOOGLE_CLIENT_ID")
+	delete(env, "KURA_GOOGLE_CLIENT_SECRET")
+
+	disc := newDiscoveryServer(t)
+	defer disc.Close()
+
+	env["KURA_OIDC_ISSUER_URL"] = disc.URL
+	env["KURA_OIDC_CLIENT_ID"] = "kura"
+	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
+
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig with KURA_IDP=oidc must not require Google vars: %v", err)
+	}
+	if cfg.Google == nil {
+		t.Error("serveConfig with KURA_IDP=oidc left the IdP unpopulated")
+	}
+}
+
+// With KURA_IDP=oidc and a reachable, well-formed discovery document,
+// serveConfig builds a working IdP. The Config it returns must be one
+// server.New accepts, just like the Google path.
+func TestServeConfigOIDCBuildsIdP(t *testing.T) {
+	env := serveEnv()
+	env["KURA_IDP"] = "oidc"
+
+	disc := newDiscoveryServer(t)
+	defer disc.Close()
+
+	env["KURA_OIDC_ISSUER_URL"] = disc.URL
+	env["KURA_OIDC_CLIENT_ID"] = "kura"
+	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
+
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig with KURA_IDP=oidc: %v", err)
+	}
+	if cfg.Google == nil {
+		t.Fatal("serveConfig with KURA_IDP=oidc did not populate the IdP")
+	}
+	// Prove the OIDC IdP was wired, not the Google one: its AuthCodeURL
+	// must point at the discovery server's authorization endpoint.
+	authURL := cfg.Google.AuthCodeURL("state")
+	if !strings.HasPrefix(authURL, disc.URL+"/auth") {
+		t.Errorf("AuthCodeURL = %q, expected to begin with %q — wrong IdP wired", authURL, disc.URL+"/auth")
+	}
+}
+
+// newDiscoveryServer stands up an in-process OIDC discovery endpoint
+// that issues just enough metadata for go-oidc's provider construction
+// to succeed. It is the seam that lets the OIDC path of serveConfig be
+// unit-tested without reaching a real Zitadel or Keycloak.
+func newDiscoveryServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	mux := http.NewServeMux()
+	var base string
+	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"issuer":                                base,
+			"authorization_endpoint":                base + "/auth",
+			"token_endpoint":                        base + "/token",
+			"jwks_uri":                              base + "/jwks",
+			"id_token_signing_alg_values_supported": []string{"RS256"},
+		})
+	})
+	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"keys":[]}`))
+	})
+	srv := httptest.NewServer(mux)
+	base = srv.URL
+	return srv
 }
