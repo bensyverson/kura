@@ -52,8 +52,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newStubCmd("init", "Materialize a per-client deployment scaffold"))
 	cmd.AddCommand(newUserCmd())
 	cmd.AddCommand(newRoleCmd())
-	cmd.AddCommand(newStubCmd("query", "Query records (filtered, bounded, masked)"))
-	cmd.AddCommand(newStubCmd("show", "Show a single record with related entities"))
+	cmd.AddCommand(newQueryCmd())
+	cmd.AddCommand(newShowCmd())
 
 	// Operations projected from the registry — the single source of
 	// truth shared with MCP and agent-context. Stubs above are replaced

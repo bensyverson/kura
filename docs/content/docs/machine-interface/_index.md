@@ -11,6 +11,7 @@ How agents and other programs talk to Kura: the HTTP API exposed by `kura serve`
   {{< card link="cli-session" title="CLI session" subtitle="status, login, logout, whoami — the four verbs an agent uses to orient itself." >}}
   {{< card link="cli-profiles" title="CLI profiles" subtitle="--client multi-target, kura profile list/add/remove, and the no-credentials rule." >}}
   {{< card link="cli-users-roles" title="CLI users & roles" subtitle="kura user/role verbs over the gated admin API — variadic, atomic, idempotent." >}}
+  {{< card link="cli-data" title="CLI data verbs" subtitle="kura query / kura show — bounded, masked, flat (no relationship traversal)." >}}
 {{< /cards >}}
 
 Other machine-interface pages are filled in as the HTTP API and MCP phases of the build plan land.
