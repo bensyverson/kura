@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestFakeIdPDirectoryReportsSetStatus(t *testing.T) {
-	dir := NewFakeIdPDirectory().
+func TestFakeDirectoryReportsSetStatus(t *testing.T) {
+	dir := NewFakeDirectory().
 		Set("active@client.com", AccountActive).
 		Set("suspended@client.com", AccountSuspended)
 
@@ -27,8 +27,8 @@ func TestFakeIdPDirectoryReportsSetStatus(t *testing.T) {
 
 // An email the directory has never heard of is absent — the account
 // does not exist in the identity provider — not an error.
-func TestFakeIdPDirectoryUnknownEmailIsAbsent(t *testing.T) {
-	dir := NewFakeIdPDirectory()
+func TestFakeDirectoryUnknownEmailIsAbsent(t *testing.T) {
+	dir := NewFakeDirectory()
 	got, err := dir.AccountStatus(context.Background(), "ghost@client.com")
 	if err != nil {
 		t.Fatalf("AccountStatus: %v", err)
@@ -38,6 +38,6 @@ func TestFakeIdPDirectoryUnknownEmailIsAbsent(t *testing.T) {
 	}
 }
 
-func TestFakeIdPDirectoryIsAnIdPDirectory(t *testing.T) {
-	var _ IdPDirectory = NewFakeIdPDirectory()
+func TestFakeDirectoryIsADirectory(t *testing.T) {
+	var _ Directory = NewFakeDirectory()
 }

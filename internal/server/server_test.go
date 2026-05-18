@@ -49,7 +49,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Gate:     g,
 		Records:  data.NewMemStore(),
 		Users:    data.NewMemUserStore(),
-		IdP:      identity.NewFakeIdPDirectory(),
+		IdP:      identity.NewFakeDirectory(),
 		Audit:    store,
 	}, auth
 }

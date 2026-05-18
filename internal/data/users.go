@@ -63,7 +63,7 @@ type IdPMismatch struct {
 // active — suspended or absent — is a mismatch: access the deployment no
 // longer intends to grant. A user with no roles is never a mismatch,
 // because there is no access to revoke.
-func DetectIdPMismatches(ctx context.Context, store UserStore, dir identity.IdPDirectory) ([]IdPMismatch, error) {
+func DetectIdPMismatches(ctx context.Context, store UserStore, dir identity.Directory) ([]IdPMismatch, error) {
 	users, err := store.ListUsers(ctx)
 	if err != nil {
 		return nil, err

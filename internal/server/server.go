@@ -77,7 +77,7 @@ type Config struct {
 	// IdP reports identity-provider account status, so the admin
 	// endpoints can surface a mismatch — a suspended account still
 	// holding a role. Required.
-	IdP identity.IdPDirectory
+	IdP identity.Directory
 	// Audit is the read seam over the audit subsystem — the same store the
 	// Recorder (and the Gate's recorder) write to. The audit query and
 	// stream endpoints read through it. Required: wiring it to a store

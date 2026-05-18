@@ -26,6 +26,18 @@
 #                                  with — a sign-in here lands as a
 #                                  Consultant
 #
+#   And, for the Admin SDK Directory client kura serve wires under
+#   KURA_IDP=google (IdP-mismatch detection):
+#
+#       KURA_GOOGLE_DIRECTORY_CREDENTIALS
+#                                  path to the service-account JSON key
+#                                  with domain-wide delegation granted
+#                                  for the admin.directory.user.readonly
+#                                  scope (see docs/.../google-workspace-directory)
+#       KURA_GOOGLE_DIRECTORY_SUBJECT
+#                                  Workspace admin email the service
+#                                  account impersonates
+#
 #   Optional, to exercise the client-domain branches instead:
 #
 #       KURA_CLIENT_DOMAINS        comma-separated client Workspace domains
@@ -35,6 +47,8 @@
 #
 #   export KURA_GOOGLE_CLIENT_ID=...
 #   export KURA_GOOGLE_CLIENT_SECRET=...
+#   export KURA_GOOGLE_DIRECTORY_CREDENTIALS=$HOME/secrets/kura-sa.json
+#   export KURA_GOOGLE_DIRECTORY_SUBJECT=admin@yourfirm.com
 #   export KURA_FIRM_DOMAIN=yourfirm.com
 #   scripts/oauth-smoke.sh
 #
@@ -45,7 +59,7 @@ PUBLIC_URL="http://${ADDR}"
 
 # --- check prerequisites ----------------------------------------------
 missing=0
-for v in KURA_GOOGLE_CLIENT_ID KURA_GOOGLE_CLIENT_SECRET KURA_FIRM_DOMAIN; do
+for v in KURA_GOOGLE_CLIENT_ID KURA_GOOGLE_CLIENT_SECRET KURA_GOOGLE_DIRECTORY_CREDENTIALS KURA_GOOGLE_DIRECTORY_SUBJECT KURA_FIRM_DOMAIN; do
 	if [[ -z "${!v:-}" ]]; then
 		echo "missing required env var: $v" >&2
 		missing=1
@@ -60,6 +74,9 @@ fi
 # The signing secret only needs to be stable for the life of this run.
 export KURA_SIGNING_SECRET="${KURA_SIGNING_SECRET:-$(head -c 32 /dev/urandom | base64)}"
 export KURA_PUBLIC_URL="$PUBLIC_URL"
+# This script is for the Google sign-in path; pin KURA_IDP so the server
+# selects the Google IdP and the Google Directory client.
+export KURA_IDP=google
 
 # --- build ------------------------------------------------------------
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

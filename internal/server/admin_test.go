@@ -22,7 +22,7 @@ import (
 // granted through an endpoint is a role the gate enforces. It returns
 // the server, the user store (so a test can inspect it), the IdP fake,
 // and tokens for an admin, an auditor, and a plain user.
-func adminServer(t *testing.T) (srv *Server, users *data.MemUserStore, idp *identity.FakeIdPDirectory, adminTok, auditorTok, userTok string) {
+func adminServer(t *testing.T) (srv *Server, users *data.MemUserStore, idp *identity.FakeDirectory, adminTok, auditorTok, userTok string) {
 	t.Helper()
 	m := &manifest.Manifest{
 		Version: "1",
@@ -48,7 +48,7 @@ func adminServer(t *testing.T) (srv *Server, users *data.MemUserStore, idp *iden
 			t.Fatalf("seeding role for %s: %v", email, err)
 		}
 	}
-	idp = identity.NewFakeIdPDirectory()
+	idp = identity.NewFakeDirectory()
 
 	g, err := gate.New(auth, evaluator, users, m, pii.NewScanner(pii.NewFakeDetector()), audit.NewRecorder(audit.NewMemStore()))
 	if err != nil {

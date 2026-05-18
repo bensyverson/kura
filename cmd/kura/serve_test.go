@@ -11,20 +11,25 @@ import (
 // serveEnv is a complete set of the environment variables serveConfig
 // requires, for tests to start from and then perturb. It includes the
 // optional LLM-gateway variables so the baseline produces a working
-// gateway; tests that care about its absence delete them.
-func serveEnv() map[string]string {
+// gateway, and a per-test service-account JSON file so the default
+// KURA_IDP=google directory wiring is complete; tests that care about
+// the absence of any variable delete it.
+func serveEnv(t *testing.T) map[string]string {
+	t.Helper()
 	return map[string]string{
-		"KURA_SIGNING_SECRET":        "a-test-signing-secret",
-		"KURA_IDP":                   "google",
-		"KURA_GOOGLE_CLIENT_ID":      "client-id.apps.googleusercontent.com",
-		"KURA_GOOGLE_CLIENT_SECRET":  "google-client-secret",
-		"KURA_PUBLIC_URL":            "https://kura.client.example",
-		"KURA_FIRM_DOMAIN":           "examplefirm.com",
-		"KURA_PII_DETECTOR_URL":      "http://127.0.0.1:9100/detect",
-		"KURA_CLIENT_DOMAINS":        "client.example",
-		"KURA_ADMIN_EMAILS":          "boss@client.example",
-		"KURA_ANTHROPIC_API_KEY":     "sk-ant-test-key",
-		"KURA_ANTHROPIC_DPA_ON_FILE": "true",
+		"KURA_SIGNING_SECRET":               "a-test-signing-secret",
+		"KURA_IDP":                          "google",
+		"KURA_GOOGLE_CLIENT_ID":             "client-id.apps.googleusercontent.com",
+		"KURA_GOOGLE_CLIENT_SECRET":         "google-client-secret",
+		"KURA_GOOGLE_DIRECTORY_CREDENTIALS": testServiceAccountFile(t),
+		"KURA_GOOGLE_DIRECTORY_SUBJECT":     "admin@examplefirm.com",
+		"KURA_PUBLIC_URL":                   "https://kura.client.example",
+		"KURA_FIRM_DOMAIN":                  "examplefirm.com",
+		"KURA_PII_DETECTOR_URL":             "http://127.0.0.1:9100/detect",
+		"KURA_CLIENT_DOMAINS":               "client.example",
+		"KURA_ADMIN_EMAILS":                 "boss@client.example",
+		"KURA_ANTHROPIC_API_KEY":            "sk-ant-test-key",
+		"KURA_ANTHROPIC_DPA_ON_FILE":        "true",
 	}
 }
 
@@ -32,7 +37,7 @@ func serveEnv() map[string]string {
 // server with no signing secret cannot mint or verify a token, and must
 // not start.
 func TestServeConfigRequiresSigningSecret(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_SIGNING_SECRET")
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err == nil {
 		t.Error("serveConfig returned no error when KURA_SIGNING_SECRET was unset")
@@ -42,7 +47,7 @@ func TestServeConfigRequiresSigningSecret(t *testing.T) {
 // serveConfig must fail when the Google OAuth client credentials are
 // absent — kura serve cannot broker sign-in without them.
 func TestServeConfigRequiresGoogleCredentials(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_GOOGLE_CLIENT_ID")
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err == nil {
 		t.Error("serveConfig returned no error when KURA_GOOGLE_CLIENT_ID was unset")
@@ -53,7 +58,7 @@ func TestServeConfigRequiresGoogleCredentials(t *testing.T) {
 // cannot mask without a detector, and a server whose gate cannot mask
 // must not start.
 func TestServeConfigRequiresDetectorURL(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_PII_DETECTOR_URL")
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err == nil {
 		t.Error("serveConfig returned no error when KURA_PII_DETECTOR_URL was unset")
@@ -63,7 +68,7 @@ func TestServeConfigRequiresDetectorURL(t *testing.T) {
 // With a complete environment, serveConfig produces a Config that New
 // accepts — proof the wiring is complete.
 func TestServeConfigWiresAcceptableConfig(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatalf("serveConfig: %v", err)
@@ -102,7 +107,7 @@ func TestServeCommandIsWired(t *testing.T) {
 // With the API key present and the DPA attested on file, serveConfig
 // builds a working LLM gateway — the /api/llm endpoint will serve.
 func TestServeConfigBuildsLLMGatewayWhenDPAOnFile(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatalf("serveConfig: %v", err)
@@ -116,7 +121,7 @@ func TestServeConfigBuildsLLMGatewayWhenDPAOnFile(t *testing.T) {
 // serveConfig still produces a usable Config — the server runs — but
 // leaves the LLM gateway nil, so the /api/llm endpoint refuses to serve.
 func TestServeConfigLeavesLLMGatewayNilWhenDPANotOnFile(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_ANTHROPIC_DPA_ON_FILE")
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
@@ -130,7 +135,7 @@ func TestServeConfigLeavesLLMGatewayNilWhenDPANotOnFile(t *testing.T) {
 // With no Anthropic API key there is no provider to broker, so there is
 // no gateway — the endpoint refuses to serve, like the DPA-failed case.
 func TestServeConfigLeavesLLMGatewayNilWithoutAPIKey(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_ANTHROPIC_API_KEY")
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
@@ -158,7 +163,7 @@ func TestServeCommandHasAddrFlag(t *testing.T) {
 // default. A typo in the selector would otherwise silently change who
 // can sign in.
 func TestServeConfigRequiresKURA_IDP(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_IDP")
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
@@ -172,7 +177,7 @@ func TestServeConfigRequiresKURA_IDP(t *testing.T) {
 // With KURA_IDP=google, serveConfig wires the Google IdP — explicit form
 // of the default.
 func TestServeConfigSelectsGoogleIdP(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "google"
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
@@ -187,7 +192,7 @@ func TestServeConfigSelectsGoogleIdP(t *testing.T) {
 // otherwise silently fall back to a default and serve a sign-in flow
 // the operator did not intend.
 func TestServeConfigRejectsUnknownIdP(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "banana"
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
@@ -203,7 +208,7 @@ func TestServeConfigRejectsUnknownIdP(t *testing.T) {
 // attempted, so the operator sees a config error rather than a hung
 // startup.
 func TestServeConfigOIDCRequiresIssuerURL(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "oidc"
 	env["KURA_OIDC_CLIENT_ID"] = "kura"
 	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
@@ -218,7 +223,7 @@ func TestServeConfigOIDCRequiresIssuerURL(t *testing.T) {
 
 // With KURA_IDP=oidc, missing KURA_OIDC_CLIENT_ID must fail.
 func TestServeConfigOIDCRequiresClientID(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "oidc"
 	env["KURA_OIDC_ISSUER_URL"] = "https://issuer.example/"
 	env["KURA_OIDC_CLIENT_SECRET"] = "shh"
@@ -233,7 +238,7 @@ func TestServeConfigOIDCRequiresClientID(t *testing.T) {
 
 // With KURA_IDP=oidc, missing KURA_OIDC_CLIENT_SECRET must fail.
 func TestServeConfigOIDCRequiresClientSecret(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "oidc"
 	env["KURA_OIDC_ISSUER_URL"] = "https://issuer.example/"
 	env["KURA_OIDC_CLIENT_ID"] = "kura"
@@ -250,7 +255,7 @@ func TestServeConfigOIDCRequiresClientSecret(t *testing.T) {
 // a deployment that signs in via OIDC must be able to run without ever
 // touching the Google environment variables.
 func TestServeConfigOIDCDoesNotRequireGoogleVars(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "oidc"
 	delete(env, "KURA_GOOGLE_CLIENT_ID")
 	delete(env, "KURA_GOOGLE_CLIENT_SECRET")
@@ -275,7 +280,7 @@ func TestServeConfigOIDCDoesNotRequireGoogleVars(t *testing.T) {
 // serveConfig builds a working IdP. The Config it returns must be one
 // server.New accepts, just like the Google path.
 func TestServeConfigOIDCBuildsIdP(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "oidc"
 
 	disc := newDiscoveryServer(t)
@@ -303,7 +308,7 @@ func TestServeConfigOIDCBuildsIdP(t *testing.T) {
 // With KURA_IDP=microsoft, missing KURA_MICROSOFT_TENANT_ID must fail
 // before any network discovery is attempted.
 func TestServeConfigMicrosoftRequiresTenantID(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "microsoft"
 	env["KURA_MICROSOFT_CLIENT_ID"] = "kura"
 	env["KURA_MICROSOFT_CLIENT_SECRET"] = "shh"
@@ -318,7 +323,7 @@ func TestServeConfigMicrosoftRequiresTenantID(t *testing.T) {
 
 // With KURA_IDP=microsoft, missing KURA_MICROSOFT_CLIENT_ID must fail.
 func TestServeConfigMicrosoftRequiresClientID(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "microsoft"
 	env["KURA_MICROSOFT_TENANT_ID"] = "common"
 	env["KURA_MICROSOFT_CLIENT_SECRET"] = "shh"
@@ -333,7 +338,7 @@ func TestServeConfigMicrosoftRequiresClientID(t *testing.T) {
 
 // With KURA_IDP=microsoft, missing KURA_MICROSOFT_CLIENT_SECRET must fail.
 func TestServeConfigMicrosoftRequiresClientSecret(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "microsoft"
 	env["KURA_MICROSOFT_TENANT_ID"] = "common"
 	env["KURA_MICROSOFT_CLIENT_ID"] = "kura"
@@ -350,7 +355,7 @@ func TestServeConfigMicrosoftRequiresClientSecret(t *testing.T) {
 // not required — a Microsoft-only deployment must boot without ever
 // setting them.
 func TestServeConfigMicrosoftDoesNotRequireOtherIdPVars(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_IDP"] = "microsoft"
 	delete(env, "KURA_GOOGLE_CLIENT_ID")
 	delete(env, "KURA_GOOGLE_CLIENT_SECRET")
@@ -377,7 +382,7 @@ func TestServeConfigMicrosoftDoesNotRequireOtherIdPVars(t *testing.T) {
 // IdP, so the consent-screen URL carries the operator-chosen
 // redirect_uri.
 func TestServeConfigOAuthRedirectURLOverride(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	env["KURA_OAUTH_REDIRECT_URL"] = "https://gateway.example/proxy/oauth/callback"
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
@@ -393,7 +398,7 @@ func TestServeConfigOAuthRedirectURLOverride(t *testing.T) {
 // KURA_PUBLIC_URL — the existing default — so an operator who does not
 // terminate at a non-Kura path does not have to set it.
 func TestServeConfigOAuthRedirectURLDefault(t *testing.T) {
-	env := serveEnv()
+	env := serveEnv(t)
 	delete(env, "KURA_OAUTH_REDIRECT_URL")
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {

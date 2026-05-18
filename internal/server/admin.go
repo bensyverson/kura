@@ -114,7 +114,7 @@ func roleBinding(users data.UserStore, assign bool) adminBinding {
 // mismatchesBinding builds the binding for GET /api/users/mismatches:
 // cross-check the authorized list against the identity provider. A
 // review read.
-func mismatchesBinding(users data.UserStore, idp identity.IdPDirectory) adminBinding {
+func mismatchesBinding(users data.UserStore, idp identity.Directory) adminBinding {
 	return func(r *http.Request, _ identity.Principal) (gate.AdminRequest, adminOp, error) {
 		req := gate.AdminRequest{
 			Token:    bearerToken(r),

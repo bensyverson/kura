@@ -52,6 +52,15 @@ Configuration is read from the environment:
                              KURA_IDP=google)
   KURA_GOOGLE_CLIENT_SECRET  Google OAuth client secret (required when
                              KURA_IDP=google)
+  KURA_GOOGLE_DIRECTORY_CREDENTIALS
+                             path to the service-account JSON key for
+                             the Admin SDK Directory client; powers
+                             IdP-mismatch detection (required when
+                             KURA_IDP=google)
+  KURA_GOOGLE_DIRECTORY_SUBJECT
+                             Workspace admin email the directory
+                             service account impersonates (required
+                             when KURA_IDP=google)
   KURA_MICROSOFT_TENANT_ID   Microsoft Entra Directory (tenant) ID, or
                              "common" for multi-tenant (required when
                              KURA_IDP=microsoft)
@@ -147,6 +156,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 
+	dir, err := buildDirectory(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
+
 	auth := identity.NewAuthenticator([]byte(secret))
 	// MemStore is the v1 audit backing for kura serve: the DB-backed
 	// audit store is a later, separate build-plan task. Until it lands,
@@ -187,10 +201,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// so nothing reads it yet anyway.
 		Records: data.NewMemStore(),
 		Users:   users,
-		// FakeIdPDirectory is the v1 placeholder: the real Google Admin
-		// Directory client is its own build-plan task. Until it lands,
-		// IdP-mismatch detection reports no mismatches.
-		IdP: identity.NewFakeIdPDirectory(),
+		// IdP is the vendor Directory paired with the sign-in IdP:
+		// googleDirectory for Google, microsoftDirectory for Entra,
+		// noopDirectory for generic OIDC (no portable directory API).
+		// buildDirectory picks the implementation from KURA_IDP.
+		IdP: dir,
 		Trust: identity.TenantTrust{
 			FirmTenant:    firmDomain,
 			ClientTenants: splitList(getenv("KURA_CLIENT_DOMAINS")),
@@ -306,6 +321,76 @@ func buildIdP(getenv func(string) string, redirectURL string) (server.IdentityPr
 		})
 	default:
 		return nil, fmt.Errorf("serve: KURA_IDP=%q is not a recognized identity provider (expected one of: google, microsoft, oidc)", kind)
+	}
+}
+
+// buildDirectory picks an identity.Directory implementation by KURA_IDP
+// and hydrates it from the corresponding family of environment
+// variables, in parallel with buildIdP.
+//
+// "google" wires googleDirectory from KURA_GOOGLE_DIRECTORY_CREDENTIALS
+// (a service-account JSON file path) and KURA_GOOGLE_DIRECTORY_SUBJECT
+// (the Workspace admin email the service account impersonates). Both
+// are required: the Admin SDK refuses anonymous calls.
+//
+// "microsoft" wires microsoftDirectory from the same KURA_MICROSOFT_*
+// client credentials the IdP uses — the Graph directory client runs
+// as the application, against the same Entra tenant.
+//
+// "oidc" wires the noop directory: generic OIDC has no standard
+// directory API, so IdP-mismatch detection is unavailable on this path
+// (the endpoint serves a consistent empty result rather than a
+// transport error).
+func buildDirectory(getenv func(string) string) (identity.Directory, error) {
+	kind := strings.ToLower(strings.TrimSpace(getenv("KURA_IDP")))
+	required := func(key string) (string, error) {
+		if v := getenv(key); v != "" {
+			return v, nil
+		}
+		return "", fmt.Errorf("serve: required environment variable %s is not set", key)
+	}
+	switch kind {
+	case "google":
+		credsFile, err := required("KURA_GOOGLE_DIRECTORY_CREDENTIALS")
+		if err != nil {
+			return nil, err
+		}
+		subject, err := required("KURA_GOOGLE_DIRECTORY_SUBJECT")
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+		defer cancel()
+		return server.NewGoogleDirectory(ctx, server.GoogleDirectoryConfig{
+			CredentialsFile: credsFile,
+			Subject:         subject,
+		})
+	case "microsoft":
+		tenantID, err := required("KURA_MICROSOFT_TENANT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientID, err := required("KURA_MICROSOFT_CLIENT_ID")
+		if err != nil {
+			return nil, err
+		}
+		clientSecret, err := required("KURA_MICROSOFT_CLIENT_SECRET")
+		if err != nil {
+			return nil, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), oidcDiscoveryTimeout)
+		defer cancel()
+		return server.NewMicrosoftDirectory(ctx, server.MicrosoftDirectoryConfig{
+			TenantID:     tenantID,
+			ClientID:     clientID,
+			ClientSecret: clientSecret,
+		})
+	case "oidc":
+		return server.NewNoopDirectory(), nil
+	default:
+		// buildIdP has already rejected this case; reach here only via
+		// an unset KURA_IDP, which buildIdP also rejects.
+		return nil, fmt.Errorf("serve: KURA_IDP=%q is not a recognized identity provider", kind)
 	}
 }
 

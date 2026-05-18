@@ -146,7 +146,7 @@ func TestDetectIdPMismatches(t *testing.T) {
 	_ = store.AssignRoles(ctx, "absent@client.com", "auditor")
 	// noroles@client.com is on the list but holds no roles.
 
-	dir := identity.NewFakeIdPDirectory().
+	dir := identity.NewFakeDirectory().
 		Set("active@client.com", identity.AccountActive).
 		Set("suspended@client.com", identity.AccountSuspended)
 	// absent@client.com and noroles@client.com are unknown to the

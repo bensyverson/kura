@@ -211,6 +211,44 @@ Application URIs → Allowed Callback URLs →
 `<KURA_PUBLIC_URL>/oauth/callback`. Auth0 sets `email_verified=true`
 after the user verifies their email through the link Auth0 sends.
 
+## Known limitation: no IdP-mismatch detection
+
+The Google and Microsoft IdPs each pair with a directory client
+(Workspace Admin SDK, Microsoft Graph) that powers Kura's
+**IdP-mismatch detection** — the `GET /api/users/mismatches` endpoint
+that surfaces users who hold Kura roles but whose IdP account is
+suspended or deleted upstream.
+
+Generic OIDC has **no standard directory API**. The OIDC core spec
+covers token issuance; account-state retrieval is vendor-specific
+(Keycloak's Admin REST API, Zitadel's Management API, Okta's Users
+API, Auth0's Management API) with no portable shape Kura can target.
+
+On the generic-OIDC IdP path Kura therefore wires a no-op directory:
+the mismatch endpoint runs (so callers get a consistent surface) but
+always reports zero mismatches. This is the most conservative answer
+— it never produces a false positive — but it does mean the
+defense-in-depth that the dedicated IdPs offer is unavailable here.
+
+Compensate at the IdP side:
+
+- **Shorter token lifetimes.** A revoked Kura role only stops mattering
+  to the gate; a still-active IdP session can sign back in. A 1-hour
+  Kura token TTL is the lower bound; pair it with an IdP session that
+  is itself short-lived.
+- **IdP-side session revocation.** When a person leaves, revoke their
+  IdP session there (Keycloak: **Users → Sessions → Logout**; Zitadel:
+  **Deactivate user**; Okta/Auth0: deactivate). Combined with a short
+  Kura TTL, this caps how long stale access can be exercised.
+- **Remove from the Kura authorized-user list promptly.** This is the
+  Kura-side control: a user who is not on the list cannot exercise any
+  role, regardless of IdP state.
+
+If you need IdP-mismatch detection and your provider exposes a
+directory API, file an issue describing the provider — a vendor-specific
+directory client is straightforward to add behind the same
+`identity.Directory` seam the Google and Microsoft clients implement.
+
 ## Verify
 
 `scripts/oidc-smoke.sh` drives the full sign-in end-to-end against
