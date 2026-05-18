@@ -4,14 +4,24 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/bensyverson/kura/internal/clio"
 )
 
 func main() {
-	err := newRootCmd().Execute()
+	// signal.NotifyContext propagates SIGINT/SIGTERM through cmd.Context()
+	// to every running verb. The long-running ones — `kura tail` today,
+	// `kura --wait <op>` later — read it to shut down cleanly on Ctrl-C;
+	// the short-lived ones never see it fire.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	err := newRootCmd().ExecuteContext(ctx)
 	if err != nil {
 		// stdout is data, stderr is diagnostics — never interleave.
 		// ExitCode walks errors.As, so a clio error wrapped by cobra
