@@ -20,6 +20,7 @@ import (
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/llm"
 )
 
@@ -35,7 +36,7 @@ const defaultTokenTTL = 12 * time.Hour
 // collaborator is nil. A server that cannot resolve a token, record an
 // audit event, run a request through the core gate, read a record, or
 // manage the authorized-user list must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, and an audit store")
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, an audit store, and a jobs manager")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -84,6 +85,11 @@ type Config struct {
 	// other than the one being written to would serve a stale or empty
 	// log, so the deployment passes one store to all three. Required.
 	Audit audit.Store
+	// Jobs is the async-jobs ledger and worker. The /api/jobs endpoints
+	// are routed through it; Run drives its worker loop and calls
+	// ResetOrphans on startup so a previous-process crash recovers
+	// exactly once. Required.
+	Jobs *jobs.Manager
 	// LLM is the core LLM gateway the /api/llm endpoint brokers calls
 	// through. Unlike the other collaborators it is optional: the gateway
 	// fails closed at construction for a provider whose DPA is not on
@@ -128,7 +134,7 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
 		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil ||
-		cfg.Audit == nil {
+		cfg.Audit == nil || cfg.Jobs == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -149,6 +155,7 @@ func New(cfg Config) (*Server, error) {
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
 	s.registerAuditRoutes()
+	s.registerJobsRoutes()
 	s.registerLLMRoute()
 	s.registerWhoami()
 	return s, nil
@@ -202,6 +209,13 @@ func (s *Server) Run(ctx context.Context) error {
 	// request yet.
 	s.http.Handler = s.Handler()
 
+	// Recover any jobs left in 'running' by a previous process before we
+	// start the worker — the "ledger survives a process restart" leg of
+	// the async-jobs contract.
+	if err := s.cfg.Jobs.ResetOrphans(ctx); err != nil {
+		s.cfg.Logger.Error("jobs: reset orphans on startup", "err", err)
+	}
+
 	ln, err := net.Listen("tcp", s.cfg.Addr)
 	if err != nil {
 		s.readyOnce.Do(func() { close(s.ready) })
@@ -212,6 +226,17 @@ func (s *Server) Run(ctx context.Context) error {
 	s.mu.Unlock()
 	s.cfg.Logger.Info("http server listening", "addr", s.boundAddr)
 	s.readyOnce.Do(func() { close(s.ready) })
+
+	// Run the jobs worker alongside the HTTP server: it polls the ledger
+	// for pending jobs and processes them through the registered
+	// handlers. It exits when ctx fires.
+	workerDone := make(chan struct{})
+	go func() {
+		defer close(workerDone)
+		if err := s.cfg.Jobs.Run(ctx); err != nil {
+			s.cfg.Logger.Error("jobs: worker exited", "err", err)
+		}
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- s.http.Serve(ln) }()
@@ -226,7 +251,15 @@ func (s *Server) Run(ctx context.Context) error {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), s.cfg.ShutdownTimeout)
 		defer cancel()
 		s.cfg.Logger.Info("http server shutting down")
-		return s.http.Shutdown(shutdownCtx)
+		err := s.http.Shutdown(shutdownCtx)
+		// Wait for the worker to drain. ctx is already cancelled, so
+		// Jobs.Run is on its way out; the wait bounds how long we
+		// allow it to finish handling a single in-flight job.
+		select {
+		case <-workerDone:
+		case <-shutdownCtx.Done():
+		}
+		return err
 	}
 }
 

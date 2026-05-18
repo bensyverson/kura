@@ -14,6 +14,7 @@ import (
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/llm"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
@@ -206,6 +207,14 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// noopDirectory for generic OIDC (no portable directory API).
 		// buildDirectory picks the implementation from KURA_IDP.
 		IdP: dir,
+		// Jobs is the async-jobs ledger and worker. The Postgres-backed
+		// store is its own build-plan task; until it lands, kura serve
+		// uses MemStore — restart-survivability gets exercised by the
+		// internal/jobs integration tests rather than at this surface.
+		// No kinds are registered here; the build-plan tasks that
+		// produce long-running operations (backup/restore) will call
+		// Jobs.Register before Run.
+		Jobs: jobs.NewManager(jobs.NewMemStore()),
 		Trust: identity.TenantTrust{
 			FirmTenant:    firmDomain,
 			ClientTenants: splitList(getenv("KURA_CLIENT_DOMAINS")),

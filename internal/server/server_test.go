@@ -13,6 +13,7 @@ import (
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
 )
@@ -38,6 +39,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 	if err != nil {
 		t.Fatalf("gate.New: %v", err)
 	}
+	jobsMgr := jobs.NewManager(jobs.NewMemStore()).WithIdleBackoff(5 * time.Millisecond)
 	return Config{
 		Addr:     addr,
 		Logger:   discardLogger(),
@@ -51,6 +53,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Users:    data.NewMemUserStore(),
 		IdP:      identity.NewFakeDirectory(),
 		Audit:    store,
+		Jobs:     jobsMgr,
 	}, auth
 }
 

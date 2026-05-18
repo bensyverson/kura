@@ -56,6 +56,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newShowCmd())
 	cmd.AddCommand(newLogCmd())
 	cmd.AddCommand(newTailCmd())
+	cmd.AddCommand(newJobsCmd())
 
 	// Operations projected from the registry — the single source of
 	// truth shared with MCP and agent-context. Stubs above are replaced
