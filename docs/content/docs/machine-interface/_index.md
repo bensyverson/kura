@@ -14,6 +14,7 @@ How agents and other programs talk to Kura: the HTTP API exposed by `kura serve`
   {{< card link="cli-data" title="CLI data verbs" subtitle="kura query / kura show — bounded, masked, flat (no relationship traversal)." >}}
   {{< card link="cli-audit" title="CLI audit verbs" subtitle="kura log / kura tail — filterable audit query and live NDJSON streaming." >}}
   {{< card link="cli-jobs" title="CLI jobs verbs" subtitle="kura jobs list/get and --wait — the durable, idempotent async-ops ledger." >}}
+  {{< card link="cli-smoke" title="CLI smoke verb" subtitle="kura smoke — the end-to-end health gate for CI, staging, and provisioning." >}}
 {{< /cards >}}
 
 Other machine-interface pages are filled in as the HTTP API and MCP phases of the build plan land.
