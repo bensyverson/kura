@@ -16,6 +16,14 @@ import (
 // code change or a redeploy.
 const EncryptionKeyName = "FIELD_ENCRYPTION_KEY"
 
+// BackupEncryptionKeyName is the secret name for the key that encrypts
+// logical backup dumps. It is deliberately distinct from
+// EncryptionKeyName: the independent backup tier earns its
+// compromise-resilience by using a key that is separate from the runtime
+// field-encryption key, so a leak of one does not expose the other. Like
+// every key it is fetched through the backend and rotatable there.
+const BackupEncryptionKeyName = "BACKUP_ENCRYPTION_KEY"
+
 // Errors returned by the secrets layer.
 var (
 	// ErrSecretNotFound is returned when a named secret is not present

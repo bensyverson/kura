@@ -42,6 +42,31 @@ The in-memory `Fake` used by tests enforces the same role contract as the real
 DO Spaces implementation, so a test exercising the runtime writer cannot
 accidentally destroy data the real bucket policy would protect.
 
+## Backup encryption: a key of its own
+
+The logical-backup tier is what earns the security improvement over bare managed
+Postgres. DO's built-in managed backups are kept on for fast operational
+recovery, but they share the primary database's credential domain. The
+independent tier adds the compromise-resilient copy: it dumps the database
+(`pg_dump`, custom format), encrypts the dump with **AES-256-GCM**, and writes
+the ciphertext to the BACKUPS bucket through the append-only role. Restore
+reverses the path — read, decrypt, `pg_restore` into a target.
+
+The backup-encryption key is sourced from the secrets manager under
+`BACKUP_ENCRYPTION_KEY`, and it is **distinct from the runtime
+`FIELD_ENCRYPTION_KEY`** that protects fields inside Postgres. Distinct keys are
+the point: a leak of the runtime key exposes neither the backups nor a path to
+forge them, and the backup copy lives in a separate region under a separate
+credential. Both operations are audited (`backup.created`, `backup.restored`)
+and run through the jobs ledger, so they are idempotent and retryable like any
+other async operation.
+
+The orchestration lives in
+[`internal/backup`](https://github.com/bensyverson/kura/tree/main/internal/backup);
+the `pg_dump`/`pg_restore` mechanism sits behind a `Dumper` interface so the
+logic is testable without a database. The scheduled invocation and the bucket's
+concrete DO Spaces client are provisioned in the deployment-baseline phase.
+
 ## Retention is policy, not action
 
 Retention lives on the bucket spec as declared lifecycle bounds (`MinDays` /
