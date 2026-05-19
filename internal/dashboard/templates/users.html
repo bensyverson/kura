@@ -1,0 +1,99 @@
+{{define "content"}}
+{{with .Users}}
+{{if .Error}}<div class="banner banner-error" role="alert">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="banner banner-ok" role="status">{{.Notice}}</div>{{end}}
+
+<section class="panel">
+  <span class="eyebrow">Access control</span>
+  <h1>Users &amp; roles</h1>
+  <p class="lede">Manage who is authorized and what each person can do. Role assignment is data you edit here; policy authoring stays a repo/PR activity, so there is no free-form editor.</p>
+
+  <ul class="user-list">
+    {{range $u := .Users}}
+    <li class="user{{if $u.Mismatch}} user-flagged{{end}}">
+      <div class="user-head">
+        <span class="mono user-email">{{$u.Email}}</span>
+        {{if $u.Mismatch}}<span class="badge badge-alert" title="Identity-provider account no longer matches this user's access">IdP: {{$u.Mismatch}}</span>{{end}}
+      </div>
+
+      <div class="user-roles">
+        {{range $r := $u.Roles}}
+        <form class="role-chip" method="post" action="/users/roles">
+          <input type="hidden" name="email" value="{{$u.Email}}">
+          <input type="hidden" name="role" value="{{$r}}">
+          <input type="hidden" name="op" value="revoke">
+          <span class="badge badge-{{$r}}">{{$r}}</span>
+          <button class="role-revoke" type="submit" aria-label="Revoke {{$r}}" title="Revoke {{$r}}">&times;</button>
+        </form>
+        {{else}}
+        <span class="muted no-roles">No roles — no access</span>
+        {{end}}
+      </div>
+
+      <div class="user-actions">
+        {{if $u.Assignable}}
+        <form class="assign" method="post" action="/users/roles">
+          <input type="hidden" name="email" value="{{$u.Email}}">
+          <input type="hidden" name="op" value="assign">
+          <label class="visually-hidden" for="assign-{{$u.Email}}">Assign a role to {{$u.Email}}</label>
+          <select class="input select" id="assign-{{$u.Email}}" name="role">
+            {{range $u.Assignable}}<option value="{{.}}">{{.}}</option>{{end}}
+          </select>
+          <button class="btn" type="submit">Assign role</button>
+        </form>
+        {{end}}
+        {{if $u.Roles}}
+        <form class="deactivate" method="post" action="/users/deactivate">
+          <input type="hidden" name="email" value="{{$u.Email}}">
+          <button class="btn btn-danger" type="submit">Deactivate</button>
+        </form>
+        {{end}}
+      </div>
+
+      <details class="effective">
+        <summary>Effective access</summary>
+        {{with $u.Effective}}
+        {{if .Grants}}
+        <table class="table table-compact">
+          <thead><tr><th>Role</th><th>Entity</th><th>Action</th><th>Visible PII</th></tr></thead>
+          <tbody>
+            {{range .Grants}}
+            <tr>
+              <td>{{.Role}}</td>
+              <td class="mono">{{.Entity}}</td>
+              <td>{{.Action}}</td>
+              <td class="mono">{{if .VisiblePII}}{{range $i, $c := .VisiblePII}}{{if $i}}, {{end}}{{$c}}{{end}}{{else}}&mdash;{{end}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <p class="muted">No roles assigned — this user has no access.</p>
+        {{end}}
+        {{end}}
+      </details>
+    </li>
+    {{else}}
+    <li class="user"><p class="muted">No users are on the authorized list yet.</p></li>
+    {{end}}
+  </ul>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Authorize</span>
+  <h2>Add a user</h2>
+  <p class="muted">Add an email to the authorized list. Adding a user grants no roles — list them here first, then assign access above.</p>
+  <form class="add-user" method="post" action="/users">
+    <label class="field-label" for="new-email">Email</label>
+    <input id="new-email" class="input" type="email" name="email" placeholder="name@firm.example" required autocomplete="off" spellcheck="false">
+    <button class="btn btn-primary" type="submit">Add user</button>
+  </form>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Policy</span>
+  <h2>Where policy is authored</h2>
+  <p class="muted">The roles above and the permissions they carry are defined in your deployment's policy, reviewed and changed through a pull request — never edited here. This page assigns existing roles to people; it never rewrites the policy itself.</p>
+</section>
+{{end}}
+{{end}}

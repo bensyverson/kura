@@ -124,6 +124,21 @@ func (s *PostgresStore) List(ctx context.Context, entity string, limit, offset i
 	return out, nil
 }
 
+// Count returns the number of entity's records visible to the store's
+// tenant. RLS scopes the count the same way it scopes Get and List, so a
+// store sees only its own tenant's rows.
+func (s *PostgresStore) Count(ctx context.Context, entity string) (int, error) {
+	var n int
+	err := s.inTenantTx(ctx, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM kura.records WHERE entity = $1`, entity).Scan(&n)
+	})
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // fieldsOf reads one record's field values, decrypting any that were
 // stored encrypted. A record with no field rows yields an empty,
 // non-nil map.

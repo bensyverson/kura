@@ -81,6 +81,32 @@ type Policy struct {
 	Grants []Grant `json:"grants"`
 }
 
+// ForRoles projects the policy to the effective policy a principal holding
+// the named roles actually has: the requested role definitions, and the
+// union of the grants attached to them. Roles the policy does not define
+// contribute nothing, and ForRoles with no roles yields an empty
+// (no-access) policy. It returns a new Policy and never mutates the
+// receiver, so an adapter can render one user's effective access without
+// disturbing the shared policy.
+func (p *Policy) ForRoles(roles ...string) *Policy {
+	want := make(map[string]bool, len(roles))
+	for _, r := range roles {
+		want[r] = true
+	}
+	eff := &Policy{}
+	for _, r := range p.Roles {
+		if want[r.Name] {
+			eff.Roles = append(eff.Roles, r)
+		}
+	}
+	for _, g := range p.Grants {
+		if want[g.Role] {
+			eff.Grants = append(eff.Grants, g)
+		}
+	}
+	return eff
+}
+
 // ValidateAgainst checks the policy is internally consistent and that
 // every grant references a role it defines, an entity the manifest
 // declares, a recognized action, and recognized PII categories. It

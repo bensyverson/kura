@@ -105,6 +105,22 @@ func TestMemStoreListUnknownEntityIsEmpty(t *testing.T) {
 	}
 }
 
+// Count reports how many records an entity holds without paging them
+// into memory — the primitive the dashboard overview's totals sit on. An
+// entity with no records counts zero, not an error.
+func TestMemStoreCount(t *testing.T) {
+	s := seeded()
+	if n, err := s.Count(context.Background(), "patient"); err != nil || n != 3 {
+		t.Errorf("Count(patient) = %d, err %v; want 3, nil", n, err)
+	}
+	if n, err := s.Count(context.Background(), "doctor"); err != nil || n != 1 {
+		t.Errorf("Count(doctor) = %d, err %v; want 1, nil", n, err)
+	}
+	if n, err := s.Count(context.Background(), "ghost"); err != nil || n != 0 {
+		t.Errorf("Count(unknown entity) = %d, err %v; want 0, nil", n, err)
+	}
+}
+
 // MemStore satisfies the RecordStore interface.
 func TestMemStoreIsARecordStore(t *testing.T) {
 	var _ RecordStore = NewMemStore()

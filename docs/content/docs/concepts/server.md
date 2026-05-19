@@ -100,6 +100,7 @@ the same — authorized and audited by construction.
 | `DELETE /api/users/{email}/roles` | `AdminManage` | admin |
 | `GET /api/users/mismatches` | `AdminReview` | admin or auditor |
 | `GET /api/policy` | `AdminReview` | admin or auditor |
+| `GET /api/overview` | `AdminReview` | admin or auditor |
 | `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
@@ -118,6 +119,15 @@ the same — authorized and audited by construction.
   your own identity is implicit in being authenticated, and the auth
   event the recorder writes already covers it. `kura whoami` is the
   CLI client.
+- **`/api/overview` is the dashboard's landscape briefing in one read.**
+  It composes — without making any new decision — the record and user
+  counts (per-entity and total), the most recent audit events, and the
+  needs-attention panel: live IdP mismatches today, with deployment tier
+  and audit-anomaly fields present as stable placeholders until those
+  subsystems land (the same forward-compatible shape `kura status` uses).
+  It is the [local dashboard](dashboard)'s overview page; there is no CLI
+  client, because the CLI's `kura status` already answers the same orienting
+  questions.
 - **IdP mismatches** — a suspended or absent account in the configured
   identity provider that still holds Kura roles — are surfaced by
   `GET /api/users/mismatches`, which cross-checks the authorized list

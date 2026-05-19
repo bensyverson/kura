@@ -154,6 +154,7 @@ func New(cfg Config) (*Server, error) {
 	s.http = &http.Server{}
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
+	s.registerOverviewRoute()
 	s.registerAuditRoutes()
 	s.registerJobsRoutes()
 	s.registerLLMRoute()

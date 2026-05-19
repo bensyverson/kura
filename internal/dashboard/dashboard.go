@@ -150,8 +150,17 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /static/", s.static)
 	mux.HandleFunc("GET /{$}", s.handleIndex)
+
+	// The Users & roles page is built: it reads server-side and accepts
+	// state-changing form posts (POST-redirect-GET, same-origin guarded).
+	mux.HandleFunc("GET /users", s.handleUsers)
+	mux.HandleFunc("POST /users", s.handleAddUser)
+	mux.HandleFunc("POST /users/roles", s.handleRoles)
+	mux.HandleFunc("POST /users/deactivate", s.handleDeactivate)
+
+	built := map[string]bool{"/": true, "/users": true}
 	for _, link := range navLinks {
-		if link.Path == "/" {
+		if built[link.Path] {
 			continue
 		}
 		mux.HandleFunc("GET "+link.Path, s.handlePlaceholder(link.Label, link.Path))
@@ -159,12 +168,17 @@ func (s *Server) Handler() http.Handler {
 	return s.loopbackOnly(mux)
 }
 
-// handleIndex renders the overview: it reads the caller's identity from
-// the remote API and renders it server-side. A missing or expired
-// session lands on the sign-in prompt; an unreachable remote lands on
-// the error page.
+// handleIndex renders the overview: it reads the caller's identity and
+// the landscape briefing from the remote API and renders both
+// server-side. A missing or expired session lands on the sign-in prompt;
+// an unreachable remote lands on the error page.
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	principal, err := s.api.whoami(r.Context())
+	if err != nil {
+		s.renderAuthOrError(w, "/", err)
+		return
+	}
+	overview, err := s.api.overview(r.Context())
 	if err != nil {
 		s.renderAuthOrError(w, "/", err)
 		return
@@ -173,6 +187,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		Title:     "Overview",
 		Nav:       navFor("/"),
 		Principal: &principal,
+		Overview:  &overview,
 	})
 }
 
@@ -314,6 +329,8 @@ type pageData struct {
 	Title     string
 	Nav       []navItem
 	Principal *identity.Principal
+	Overview  *overviewData
+	Users     *usersView
 	Body      any
 }
 

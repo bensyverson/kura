@@ -207,6 +207,36 @@ func TestPostgresStoreGetRespectsEntity(t *testing.T) {
 	}
 }
 
+// Count returns the number of an entity's records, scoped by RLS like
+// every other read: a store sees only its own tenant's rows, and an
+// entity with none counts zero rather than erroring.
+func TestPostgresStoreCount(t *testing.T) {
+	env := newDataTestEnv(t)
+	tenantA := newTenantID(t, env)
+	tenantB := newTenantID(t, env)
+	seedRecord(t, env, tenantA, "patient", map[string]string{"full_name": "Jane Doe"}, nil, testEncKey)
+	seedRecord(t, env, tenantA, "patient", map[string]string{"full_name": "John Roe"}, nil, testEncKey)
+	seedRecord(t, env, tenantA, "doctor", map[string]string{"full_name": "Dr. Who"}, nil, testEncKey)
+	seedRecord(t, env, tenantB, "patient", map[string]string{"full_name": "Other Tenant"}, nil, testEncKey)
+
+	apiPool := connectAsAPIRole(t, env)
+	storeA, err := NewPostgresStore(apiPool, tenantA, testEncKey)
+	if err != nil {
+		t.Fatalf("NewPostgresStore(tenantA): %v", err)
+	}
+	ctx := context.Background()
+
+	if n, err := storeA.Count(ctx, "patient"); err != nil || n != 2 {
+		t.Errorf("Count(patient) = %d, err %v; want 2, nil (RLS scopes to tenantA)", n, err)
+	}
+	if n, err := storeA.Count(ctx, "doctor"); err != nil || n != 1 {
+		t.Errorf("Count(doctor) = %d, err %v; want 1, nil", n, err)
+	}
+	if n, err := storeA.Count(ctx, "ghost"); err != nil || n != 0 {
+		t.Errorf("Count(unknown entity) = %d, err %v; want 0, nil", n, err)
+	}
+}
+
 // PostgresStore satisfies the RecordStore interface.
 func TestPostgresStoreIsARecordStore(t *testing.T) {
 	var _ RecordStore = (*PostgresStore)(nil)

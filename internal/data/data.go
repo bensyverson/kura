@@ -54,6 +54,11 @@ type RecordStore interface {
 	// records. limit and offset are applied as given; the gate has
 	// already clamped them. An entity with no records is an empty page.
 	List(ctx context.Context, entity string, limit, offset int) ([]Record, error)
+	// Count returns how many records an entity holds, without paging them
+	// into memory. An entity with no records counts zero, not an error.
+	// It is a read like the others — counting totals for an overview is
+	// not a separate concern from reading.
+	Count(ctx context.Context, entity string) (int, error)
 }
 
 // MemStore is an in-memory RecordStore for tests and database-less
@@ -119,4 +124,11 @@ func (m *MemStore) List(_ context.Context, entity string, limit, offset int) ([]
 		out = append(out, rec.clone())
 	}
 	return out, nil
+}
+
+// Count returns the number of records stored under entity.
+func (m *MemStore) Count(_ context.Context, entity string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.byEntity[entity]), nil
 }

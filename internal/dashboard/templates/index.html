@@ -1,15 +1,92 @@
 {{define "content"}}
+{{with .Overview}}
 <section class="panel">
   <span class="eyebrow">Dashboard</span>
   <h1>Overview</h1>
-  <p class="lede">You are signed in to the Kura dashboard — the local, loopback-bound view onto your secure data store.</p>
-  {{with .Principal}}
+  <p class="lede">The state of your secure data store at a glance — status, contents, and anything that needs your attention.</p>
   <dl class="facts">
-    <dt>Signed in as</dt><dd>{{.Email}}</dd>
-    <dt>Principal type</dt><dd><span class="badge badge-{{.Type}}">{{.Type}}</span></dd>
-    <dt>Tenant</dt><dd>{{if .Tenant}}{{.Tenant}}{{else}}<span class="muted">—</span>{{end}}</dd>
+    <dt>System status</dt><dd><span class="badge badge-status-{{.Status}}">{{.Status}}</span></dd>
+    <dt>Deployment tier</dt><dd>{{.Tier}}</dd>
   </dl>
+  <div class="stat-grid">
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Records}}</span>
+      <span class="stat-label">Records</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Entities}}</span>
+      <span class="stat-label">Entities</span>
+    </div>
+    <div class="stat">
+      <span class="stat-num">{{.Counts.Users}}</span>
+      <span class="stat-label">Authorized users</span>
+    </div>
+  </div>
+  {{with .Counts.ByEntity}}
+  <table class="table table-compact">
+    <thead><tr><th>Entity</th><th class="num">Records</th></tr></thead>
+    <tbody>
+      {{range .}}<tr><td>{{.Entity}}</td><td class="num">{{.Count}}</td></tr>{{end}}
+    </tbody>
+  </table>
   {{end}}
-  <p class="muted">System status, record and user counts, and the needs-attention panel arrive with the Overview build. This skeleton confirms the dashboard serves locally and reads through the remote API.</p>
 </section>
+
+<section class="panel">
+  <span class="eyebrow">Needs attention</span>
+  <h2>Review queue</h2>
+  {{$mismatches := .NeedsAttention.IdPMismatches}}
+  {{$anomalies := .NeedsAttention.Anomalies}}
+  {{if or $mismatches $anomalies}}
+    {{with $mismatches}}
+    <h3 class="attention-head">IdP mismatches</h3>
+    <p class="muted">Authorized users whose identity-provider account no longer matches their access. Revoke their roles or restore the account.</p>
+    <ul class="attention">
+      {{range .}}
+      <li class="attention-item">
+        <span class="attention-mark" aria-hidden="true"></span>
+        <span class="attention-body">
+          <span class="mono">{{.Email}}</span>
+          <span class="badge badge-alert">{{.Status}}</span>
+          {{with .Roles}}<span class="muted">holds {{range $i, $r := .}}{{if $i}}, {{end}}{{$r}}{{end}}</span>{{end}}
+        </span>
+      </li>
+      {{end}}
+    </ul>
+    {{end}}
+    {{with $anomalies}}
+    <h3 class="attention-head">Audit anomalies</h3>
+    <ul class="attention">
+      {{range .}}<li class="attention-item"><span class="attention-mark" aria-hidden="true"></span><span class="attention-body">{{.}}</span></li>{{end}}
+    </ul>
+    {{end}}
+  {{else}}
+  <p class="all-clear">Nothing needs attention — every authorized user has an active account.</p>
+  {{end}}
+  <p class="muted footnote">Access-review tracking and audit-anomaly detection arrive in later phases.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Recent activity</span>
+  <h2>Audit tail</h2>
+  {{with .RecentActivity}}
+  <table class="table">
+    <thead><tr><th>Time</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th></tr></thead>
+    <tbody>
+      {{range .}}
+      <tr>
+        <td class="mono">{{.Time.Format "2006-01-02 15:04:05"}}</td>
+        <td class="mono">{{if .Actor.Email}}{{.Actor.Email}}{{else}}{{.Actor.ID}}{{end}}</td>
+        <td>{{.Action}}</td>
+        <td class="mono">{{.Resource.Entity}}{{if .Resource.ID}}/{{.Resource.ID}}{{end}}</td>
+        <td><span class="badge badge-outcome-{{.Outcome}}">{{.Outcome}}</span></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No recent activity recorded.</p>
+  {{end}}
+</section>
+{{end}}
 {{end}}

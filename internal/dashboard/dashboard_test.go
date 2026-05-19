@@ -3,12 +3,15 @@ package dashboard
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/identity"
 )
 
@@ -33,6 +36,32 @@ type fakeRemote struct {
 	hits      int
 	status    int // override response status; 0 means 200 + body
 	principal identity.Principal
+
+	// overview is what /api/overview serves; overviewHits and overviewAuth
+	// record that the dashboard fetched it server-side with the token. They
+	// are tracked separately from the whoami counters so the skeleton's
+	// whoami assertions stay meaningful now that the index makes two reads.
+	overview     overviewData
+	overviewHits int
+	overviewAuth string
+
+	// users, policy, and mismatches back the Users & roles page reads;
+	// mutations records every state-changing call the dashboard made to a
+	// user/role endpoint, so a test can prove a UI action reached the
+	// remote API carrying the bearer token.
+	users      []userRow
+	policy     cedar.Policy
+	mismatches []mismatchRow
+	mutations  []recordedMutation
+}
+
+// recordedMutation is one state-changing call the dashboard's API client
+// made against the remote — what a UI action turned into on the wire.
+type recordedMutation struct {
+	Method string
+	Path   string
+	Auth   string
+	Body   string
 }
 
 func newFakeRemote(t *testing.T) *fakeRemote {
@@ -43,6 +72,17 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 			ID:     "boss@client.example",
 			Email:  "boss@client.example",
 			Tenant: "client.example",
+		},
+		overview: overviewData{
+			Status: "operational",
+			Tier:   "unknown (Phase 6+)",
+			Counts: overviewCounts{
+				Entities: 2,
+				Records:  5,
+				Users:    3,
+				ByEntity: []overviewEntityCount{{Entity: "patient", Count: 4}, {Entity: "doctor", Count: 1}},
+			},
+			NeedsAttention: overviewAttention{IdPMismatches: nil, Anomalies: []string{}},
 		},
 	}
 	mux := http.NewServeMux()
@@ -60,9 +100,93 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(fr.principal)
 	})
+	mux.HandleFunc("/api/overview", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		fr.overviewHits++
+		fr.overviewAuth = r.Header.Get("Authorization")
+		status := fr.status
+		ov := fr.overview
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ov)
+	})
+	mux.HandleFunc("GET /api/users", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		status := fr.status
+		out := usersResponse{Users: append([]userRow(nil), fr.users...)}
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+	mux.HandleFunc("GET /api/policy", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		status := fr.status
+		p := fr.policy
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(p)
+	})
+	mux.HandleFunc("GET /api/users/mismatches", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		status := fr.status
+		out := mismatchesResponse{Mismatches: append([]mismatchRow(nil), fr.mismatches...)}
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
+	record := func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		fr.mu.Lock()
+		status := fr.status
+		fr.mutations = append(fr.mutations, recordedMutation{
+			Method: r.Method,
+			Path:   r.URL.Path,
+			Auth:   r.Header.Get("Authorization"),
+			Body:   strings.TrimSpace(string(body)),
+		})
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+	mux.HandleFunc("POST /api/users", record)
+	mux.HandleFunc("DELETE /api/users/{email}", record)
+	mux.HandleFunc("POST /api/users/{email}/roles", record)
+	mux.HandleFunc("DELETE /api/users/{email}/roles", record)
+
 	fr.Server = httptest.NewServer(mux)
 	t.Cleanup(fr.Close)
 	return fr
+}
+
+// usersResponse and mismatchesResponse mirror the remote API's wire
+// envelopes for the Users & roles reads, so the fake serves the same JSON
+// shape the dashboard's client decodes.
+type usersResponse struct {
+	Users []userRow `json:"users"`
+}
+
+type mismatchesResponse struct {
+	Mismatches []mismatchRow `json:"mismatches"`
 }
 
 func newTestServer(t *testing.T, remote string, tokens TokenSource) *Server {
@@ -96,6 +220,102 @@ func TestServesIndexOnLoopback(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "boss@client.example") {
 		t.Errorf("index did not render the principal email server-side; body:\n%s", body)
+	}
+}
+
+// The overview renders the briefing server-side: system status, the
+// deployment tier, and the record/user counts the remote API reported.
+func TestIndexRendersOverviewStatusTierAndCounts(t *testing.T) {
+	fr := newFakeRemote(t)
+	s := newTestServer(t, fr.URL, staticToken{token: "tok-123"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"operational",       // system status
+		"unknown (Phase 6",  // deployment tier placeholder (the "+" is HTML-escaped)
+		"5",                 // total records
+		"3",                 // authorized users
+		"patient", "doctor", // per-entity breakdown
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("overview body missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+// The needs-attention panel surfaces an IdP mismatch — a suspended
+// account still holding a role — so the auditor sees it without leaving
+// the overview.
+func TestIndexShowsIdPMismatchInNeedsAttention(t *testing.T) {
+	fr := newFakeRemote(t)
+	fr.overview.NeedsAttention.IdPMismatches = []overviewMismatch{
+		{Email: "gone@client.example", Roles: []string{"user"}, Status: "suspended"},
+	}
+	s := newTestServer(t, fr.URL, staticToken{token: "tok-123"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "gone@client.example") {
+		t.Errorf("needs-attention panel did not surface the mismatched account; body:\n%s", body)
+	}
+	if !strings.Contains(body, "suspended") {
+		t.Errorf("needs-attention panel did not show the mismatch status; body:\n%s", body)
+	}
+}
+
+// Recent activity renders as a table of bounded audit metadata — actor,
+// action, resource, outcome — and never a field value.
+func TestIndexRendersRecentActivity(t *testing.T) {
+	fr := newFakeRemote(t)
+	fr.overview.RecentActivity = []overviewEvent{{
+		Time:     time.Date(2026, 5, 19, 14, 30, 5, 0, time.UTC),
+		Kind:     "access",
+		Outcome:  "allowed",
+		Actor:    overviewActor{Type: "user", ID: "u@client.example", Email: "u@client.example"},
+		Action:   "read",
+		Resource: overviewResource{Entity: "patient", ID: "p1"},
+	}}
+	s := newTestServer(t, fr.URL, staticToken{token: "tok-123"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/"))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"2026-05-19 14:30:05", "u@client.example", "read", "patient/p1", "allowed"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("recent-activity table missing %q; body:\n%s", want, body)
+		}
+	}
+}
+
+// The overview is fetched server-side from the remote API carrying the
+// cached bearer token — the same backend-for-frontend property the whoami
+// read has, now proven for the overview read too.
+func TestIndexOverviewCarriesBearerToken(t *testing.T) {
+	fr := newFakeRemote(t)
+	s := newTestServer(t, fr.URL, staticToken{token: "tok-123"})
+
+	s.Handler().ServeHTTP(httptest.NewRecorder(), loopbackGet("/"))
+
+	if fr.overviewHits == 0 {
+		t.Fatal("dashboard did not call /api/overview to render the overview")
+	}
+	if fr.overviewAuth != "Bearer tok-123" {
+		t.Errorf("overview Authorization = %q, want Bearer tok-123", fr.overviewAuth)
 	}
 }
 

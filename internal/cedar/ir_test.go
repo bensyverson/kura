@@ -121,6 +121,84 @@ func TestPolicyValidationCatchesBadReferences(t *testing.T) {
 	}
 }
 
+// ForRoles projects a policy to the effective policy a principal holding
+// the named roles actually has: only those role definitions, and only the
+// grants attached to them — the union of the roles' permissions.
+func TestForRolesProjectsToHeldRoles(t *testing.T) {
+	p := DefaultPolicy(testManifest(t))
+
+	eff := p.ForRoles("user")
+
+	for _, r := range eff.Roles {
+		if r.Name != "user" {
+			t.Errorf("ForRoles(\"user\") leaked role %q", r.Name)
+		}
+	}
+	if len(eff.Roles) != 1 {
+		t.Errorf("ForRoles(\"user\") = %d roles, want 1", len(eff.Roles))
+	}
+	for _, g := range eff.Grants {
+		if g.Role != "user" {
+			t.Errorf("ForRoles(\"user\") leaked a grant for role %q", g.Role)
+		}
+	}
+	if len(eff.Grants) == 0 {
+		t.Error("ForRoles(\"user\") returned no grants; the user role has permissions")
+	}
+}
+
+// A principal with several roles gets the union of every role's grants.
+func TestForRolesUnionsMultipleRoles(t *testing.T) {
+	p := DefaultPolicy(testManifest(t))
+
+	eff := p.ForRoles("user", "auditor")
+
+	gotRoles := map[string]bool{}
+	for _, r := range eff.Roles {
+		gotRoles[r.Name] = true
+	}
+	if !gotRoles["user"] || !gotRoles["auditor"] || len(gotRoles) != 2 {
+		t.Errorf("ForRoles(user, auditor) roles = %v, want exactly {user, auditor}", gotRoles)
+	}
+
+	var userGrants, auditorGrants, other int
+	for _, g := range eff.Grants {
+		switch g.Role {
+		case "user":
+			userGrants++
+		case "auditor":
+			auditorGrants++
+		default:
+			other++
+		}
+	}
+	if other != 0 {
+		t.Errorf("ForRoles(user, auditor) included %d grants for other roles", other)
+	}
+	if userGrants == 0 || auditorGrants == 0 {
+		t.Errorf("union missing grants: user=%d auditor=%d", userGrants, auditorGrants)
+	}
+}
+
+// A role the policy does not define contributes nothing, and asking for no
+// roles yields an empty (no-access) policy. ForRoles never mutates the
+// receiver.
+func TestForRolesUnknownAndEmpty(t *testing.T) {
+	p := DefaultPolicy(testManifest(t))
+	rolesBefore, grantsBefore := len(p.Roles), len(p.Grants)
+
+	if eff := p.ForRoles("nonexistent"); len(eff.Roles) != 0 || len(eff.Grants) != 0 {
+		t.Errorf("ForRoles(unknown) = %d roles / %d grants, want 0/0", len(eff.Roles), len(eff.Grants))
+	}
+	if eff := p.ForRoles(); len(eff.Roles) != 0 || len(eff.Grants) != 0 {
+		t.Errorf("ForRoles() = %d roles / %d grants, want 0/0", len(eff.Roles), len(eff.Grants))
+	}
+
+	if len(p.Roles) != rolesBefore || len(p.Grants) != grantsBefore {
+		t.Error("ForRoles mutated the receiver policy")
+	}
+}
+
 func TestDefaultRoleSemantics(t *testing.T) {
 	m := testManifest(t)
 	p := DefaultPolicy(m)

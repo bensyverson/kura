@@ -323,6 +323,299 @@ kura-copy .copy-btn {
 }
 kura-copy .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
 
+/* ── Stacked panels ─────────────────────────────────────────────── */
+.panel + .panel { margin-top: var(--space-5); }
+
+/* Secondary panel headings: the page keeps one h1; later panels open
+   with an eyebrow and an h2, a step down in weight from the title. */
+h2 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.15rem;
+  font-weight: 680;
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+}
+h3 {
+  margin: var(--space-5) 0 var(--space-2);
+  font-size: 0.82rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.footnote { margin-top: var(--space-5); font-size: 0.85rem; }
+
+/* ── Stat tiles ─────────────────────────────────────────────────── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--surface-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.stat-num {
+  font-size: 1.9rem;
+  font-weight: 680;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.stat-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* ── Tables (counts breakdown, audit tail) ──────────────────────── */
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: var(--space-4) 0 0;
+  font-size: 0.9rem;
+}
+.table th {
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: var(--hairline) solid var(--border-strong);
+}
+.table td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: var(--hairline) solid var(--border);
+  vertical-align: baseline;
+}
+.table tbody tr:last-child td { border-bottom: none; }
+.table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.table-compact { max-width: 24rem; }
+
+/* Machine values — IDs, emails, timestamps — in mono with tabular figures. */
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.table .mono { font-size: 0.84rem; }
+
+/* ── Needs-attention list ───────────────────────────────────────── */
+.attention { list-style: none; margin: var(--space-3) 0 0; padding: 0; }
+.attention-item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--alert);
+  border-radius: var(--radius-sm);
+  background: var(--alert-weak);
+}
+.attention-item + .attention-item { margin-top: var(--space-2); }
+.attention-mark {
+  flex: none;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--alert);
+  transform: translateY(-0.1em);
+}
+.attention-body { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--space-2); }
+.attention-head { margin-top: var(--space-4); }
+.all-clear {
+  margin: var(--space-3) 0 0;
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface-2);
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+
+/* ── Status / outcome badges ────────────────────────────────────── */
+/* Reuse the existing pigments: young-leaf green (the user badge) reads as
+   healthy; vermilion (the alert color) stays reserved for attention. */
+.badge-status-operational,
+.badge-outcome-allowed { background: var(--badge-user-bg); color: var(--badge-user-fg); }
+.badge-alert,
+.badge-outcome-denied { background: var(--alert-weak); color: var(--alert); }
+
+/* ── Banners (post-redirect-get flash) ──────────────────────────── */
+.banner {
+  margin: 0 auto var(--space-5);
+  max-width: var(--maxw);
+  padding: var(--space-3) var(--space-4);
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: 0.92rem;
+}
+.banner-ok { border-left-color: var(--accent); }
+.banner-error {
+  border-left-color: var(--alert);
+  background: var(--alert-weak);
+  color: var(--alert);
+}
+
+/* ── User list (Users & roles) ──────────────────────────────────── */
+.user-list { list-style: none; margin: var(--space-5) 0 0; padding: 0; }
+.user {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4) 0;
+  border-top: var(--hairline) solid var(--border);
+}
+.user:last-child { border-bottom: var(--hairline) solid var(--border); }
+.user-flagged { /* attention without shouting: a vermilion seam */ }
+.user-flagged .user-email::before {
+  content: "";
+  display: inline-block;
+  width: 0.45rem;
+  height: 0.45rem;
+  margin-right: var(--space-2);
+  border-radius: 999px;
+  background: var(--alert);
+  transform: translateY(-0.05em);
+}
+.user-head { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.user-email { font-size: 0.95rem; font-weight: 600; }
+
+.user-roles {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+.no-roles { font-size: 0.86rem; font-style: italic; }
+
+/* A role chip is a tiny inline form: the badge plus a revoke button. */
+.role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  margin: 0;
+}
+.role-revoke {
+  font: inherit;
+  font-size: 0.9rem;
+  line-height: 1;
+  padding: 0 0.2rem;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.role-revoke:hover { color: var(--alert); }
+
+.user-actions {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.assign { display: inline-flex; align-items: center; gap: var(--space-2); margin: 0; }
+.deactivate { margin: 0; }
+
+.effective {
+  grid-column: 1 / -1;
+  margin-top: var(--space-1);
+}
+.effective summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--accent);
+  width: max-content;
+}
+.effective summary:hover { text-decoration: underline; text-underline-offset: 0.15em; }
+.effective[open] summary { margin-bottom: var(--space-2); }
+.effective .table { max-width: 40rem; }
+
+/* ── Forms (inputs, selects, buttons) ───────────────────────────── */
+.field-label {
+  display: block;
+  margin-bottom: var(--space-1);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.input, .select {
+  font: inherit;
+  font-size: 0.92rem;
+  padding: var(--space-2) var(--space-3);
+  color: var(--text);
+  background: var(--surface);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+.input:focus-visible, .select:focus-visible { border-color: var(--accent); }
+.select { padding-right: var(--space-2); }
+
+.btn {
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  padding: var(--space-2) var(--space-4);
+  color: var(--text);
+  background: var(--surface);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-primary {
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.btn-primary:hover { color: var(--accent-contrast); filter: brightness(1.08); }
+.btn-danger { color: var(--alert); border-color: var(--alert-weak); }
+.btn-danger:hover { color: var(--alert); border-color: var(--alert); background: var(--alert-weak); }
+
+.add-user {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  flex-wrap: wrap;
+}
+.add-user .input { min-width: 18rem; }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Auditor role badge: reuse the slate/consultant pigment for a quiet,
+   review-only token (no new hue introduced). */
+.badge-auditor { background: var(--badge-consultant-bg); color: var(--badge-consultant-fg); }
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 44rem) {
   .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }
@@ -332,4 +625,13 @@ kura-copy .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
   .panel { padding: var(--space-5) var(--space-5) var(--space-6); }
   .facts { grid-template-columns: 1fr; gap: var(--space-1); }
   .facts dt { margin-top: var(--space-3); }
+  .stat-grid { grid-template-columns: 1fr; }
+  .table { font-size: 0.84rem; }
+  .table th, .table td { padding: var(--space-2); }
+
+  .user { grid-template-columns: 1fr; }
+  .user-roles, .user-actions, .effective { grid-column: 1; }
+  .user-actions { grid-row: auto; justify-content: flex-start; }
+  .add-user { flex-direction: column; align-items: stretch; }
+  .add-user .input { min-width: 0; }
 }
