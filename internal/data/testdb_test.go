@@ -71,6 +71,35 @@ func newDataTestEnv(t *testing.T) testEnv {
 	return testEnv{DB: pool, DSN: dsn}
 }
 
+// grantKuraAPILogin sets kura_api LOGIN with pw, serialized across
+// processes by a transaction-scoped advisory lock taken on the shared base
+// database (KURA_TEST_DATABASE_URL). kura_api is cluster-global, so
+// parallel `go test ./...` package binaries otherwise race on the same role
+// row with "tuple concurrently updated". Advisory lock tags include the
+// database OID, so the lock must be taken in the shared base database — not
+// a per-test database — to serialize across processes. The lock string
+// MUST match the one used by the db and jobs packages so the lock spans all
+// three. See internal/db/testdb_test.go (roleLoginAdvisoryLock).
+func grantKuraAPILogin(ctx context.Context, pw string) error {
+	pool, err := db.Open(os.Getenv("KURA_TEST_DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("open base db for role lock: %w", err)
+	}
+	defer pool.Close()
+	tx, err := pool.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin role-login tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('kura:test:role-login'))`); err != nil {
+		return fmt.Errorf("acquiring role-login advisory lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER ROLE kura_api LOGIN PASSWORD '`+pw+`'`); err != nil {
+		return fmt.Errorf("alter role kura_api: %w", err)
+	}
+	return tx.Commit()
+}
+
 // connectAsAPIRole grants kura_api LOGIN with a test password — mirroring
 // what the IaC layer does with a secrets-manager value — and returns a
 // pool connected as that role. The RecordStore runs as kura_api in
@@ -78,8 +107,11 @@ func newDataTestEnv(t *testing.T) testEnv {
 // tenant-isolation tests meaningful.
 func connectAsAPIRole(t *testing.T, env testEnv) *sql.DB {
 	t.Helper()
-	const pw = "kura-test-api-pw"
-	if _, err := env.DB.Exec(`ALTER ROLE kura_api LOGIN PASSWORD '` + pw + `'`); err != nil {
+	// kura_api is cluster-global; this password MUST match the value the db
+	// and jobs packages set, or a concurrent test that re-sets the password
+	// breaks this process's connection (28P01). See grantKuraAPILogin.
+	const pw = "kura-test-role-pw"
+	if err := grantKuraAPILogin(context.Background(), pw); err != nil {
 		t.Fatalf("granting LOGIN to kura_api: %v", err)
 	}
 	u, err := url.Parse(env.DSN)

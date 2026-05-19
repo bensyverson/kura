@@ -81,9 +81,12 @@ func newTestEnv(t *testing.T) testEnv {
 // does. The returned pool is closed by a t.Cleanup.
 func connectAsRole(ctx context.Context, t *testing.T, env testEnv, role string) *sql.DB {
 	t.Helper()
+	// Canonical shared test password for the cluster-global component roles.
+	// The jobs and data packages set kura_api's password to this same value;
+	// they must agree, or a concurrent test re-setting the password breaks
+	// another process's connection (28P01).
 	const pw = "kura-test-role-pw"
-	if _, err := env.DB.ExecContext(ctx,
-		fmt.Sprintf(`ALTER ROLE %s LOGIN PASSWORD %s`, quoteIdent(role), quoteLiteral(pw))); err != nil {
+	if err := grantRoleLogin(ctx, role, pw); err != nil {
 		t.Fatalf("granting LOGIN to %s: %v", role, err)
 	}
 
@@ -99,6 +102,57 @@ func connectAsRole(ctx context.Context, t *testing.T, env testEnv, role string) 
 	}
 	t.Cleanup(func() { db.Close() })
 	return db
+}
+
+// roleLoginAdvisoryLock is the SQL that takes the cross-process lock
+// guarding component-role mutation. The component roles (kura_api,
+// kura_admin, kura_audit) are cluster-global, so every test database in
+// the shared integration cluster targets the same pg_authid rows. Without
+// serialization, concurrent `ALTER ROLE … LOGIN PASSWORD` from parallel
+// `go test ./...` package binaries collide with "tuple concurrently
+// updated" (SQLSTATE XX000). The lock is keyed on a fixed string; the jobs
+// and data packages' equivalents use the SAME string so the lock spans all
+// three. It is a transaction-scoped lock, released on commit/rollback.
+//
+// Crucially, the lock is taken on a connection to the *base* database
+// (KURA_TEST_DATABASE_URL, i.e. the cluster's shared `postgres` db), not a
+// per-test database: advisory lock tags include the database OID, so the
+// same key in two different databases is two different locks and would not
+// serialize. ALTER ROLE is global and runs from any database, so taking
+// both the lock and the ALTER on the shared base connection serializes
+// every test process on the cluster.
+const roleLoginAdvisoryLock = `SELECT pg_advisory_xact_lock(hashtext('kura:test:role-login'))`
+
+// grantRoleLogin sets role LOGIN with pw, serialized by the shared advisory
+// lock above. It returns an error rather than calling t.Fatal so it is safe
+// to invoke from concurrent goroutines (TestConcurrentRoleLoginIsSerialized
+// does exactly that to guard against the lock being removed or scoped wrong).
+func grantRoleLogin(ctx context.Context, role, pw string) error {
+	return lockedRoleAlter(ctx, fmt.Sprintf(`ALTER ROLE %s LOGIN PASSWORD %s`, quoteIdent(role), quoteLiteral(pw)))
+}
+
+// lockedRoleAlter runs alterSQL (a role mutation) on a connection to the
+// shared base database, holding the cross-process advisory lock for the
+// duration. See roleLoginAdvisoryLock for why the base database matters.
+func lockedRoleAlter(ctx context.Context, alterSQL string) error {
+	base := os.Getenv("KURA_TEST_DATABASE_URL")
+	pool, err := Open(base)
+	if err != nil {
+		return fmt.Errorf("open base db for role lock: %w", err)
+	}
+	defer pool.Close()
+	tx, err := pool.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin role-login tx: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, roleLoginAdvisoryLock); err != nil {
+		return fmt.Errorf("acquiring role-login advisory lock: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, alterSQL); err != nil {
+		return fmt.Errorf("%s: %w", alterSQL, err)
+	}
+	return tx.Commit()
 }
 
 // tenantConn returns a dedicated connection with the kura.tenant_id GUC set
