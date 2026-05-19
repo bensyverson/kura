@@ -58,10 +58,11 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newTailCmd())
 	cmd.AddCommand(newJobsCmd())
 
-	// Operations projected from the registry — the single source of
-	// truth shared with MCP and agent-context. Stubs above are replaced
-	// by registry entries as their build-plan phases land.
-	for _, op := range buildRegistry().All() {
+	// Operations projected from the registry — the typed-operations seam
+	// shared with MCP. Stubs above are replaced by registry entries as
+	// their build-plan phases land. `kura agent-context` lives here so it
+	// can introspect the fully-built root via a closure capture.
+	for _, op := range buildRegistry(cmd).All() {
 		cmd.AddCommand(cobraCommand(op))
 	}
 

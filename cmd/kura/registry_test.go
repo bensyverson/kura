@@ -1,48 +1,30 @@
 package main
 
 import (
-	"bytes"
-	"encoding/json"
+	"github.com/bensyverson/kura/internal/ops"
 	"testing"
 )
 
-// `kura agent-context` must be projected from the operations registry —
-// the same registry that produces the CLI command also produces the JSON
-// entry, so the command and its self-description cannot drift.
-func TestAgentContextProjectedFromRegistry(t *testing.T) {
-	cmd := newRootCmd()
-	var out bytes.Buffer
-	cmd.SetOut(&out)
-	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"agent-context"})
-	if err := cmd.Execute(); err != nil {
-		t.Fatalf("kura agent-context returned an error: %v", err)
-	}
-
-	var ctx struct {
-		Version    string `json:"version"`
-		Operations []struct {
-			Name    string `json:"name"`
-			Summary string `json:"summary"`
-		} `json:"operations"`
-	}
-	if err := json.Unmarshal(out.Bytes(), &ctx); err != nil {
-		t.Fatalf("agent-context output is not valid JSON: %v\n%s", err, out.String())
-	}
-	if ctx.Version == "" {
-		t.Error("agent-context JSON must carry a version")
-	}
-
-	found := false
-	for _, op := range ctx.Operations {
+// The agent-context Cobra command is still wired through the ops
+// Registry — that is the seam shared with MCP. The handler walks the
+// live Cobra tree at execution time (see agent_context_test.go for the
+// command-tree assertions); this test just guards the registration.
+func TestAgentContextRegisteredInOpsRegistry(t *testing.T) {
+	r := buildRegistry(newRootCmd())
+	var found *ops.Operation
+	for _, op := range r.All() {
 		if op.Name == "agent-context" {
-			found = true
-			if op.Summary == "" {
-				t.Error("the agent-context operation is missing its summary")
-			}
+			found = &op
+			break
 		}
 	}
-	if !found {
-		t.Errorf("agent-context did not project its own registry entry:\n%s", out.String())
+	if found == nil {
+		t.Fatalf("agent-context is not registered in the ops Registry")
+	}
+	if found.Summary == "" {
+		t.Error("the agent-context operation is missing its summary")
+	}
+	if found.Handler == nil {
+		t.Error("the agent-context operation has no handler")
 	}
 }
