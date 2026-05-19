@@ -158,7 +158,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /users/roles", s.handleRoles)
 	mux.HandleFunc("POST /users/deactivate", s.handleDeactivate)
 
-	built := map[string]bool{"/": true, "/users": true}
+	// The Cedar structured viewer is built: a read-only render of the
+	// policy IR.
+	mux.HandleFunc("GET /policy", s.handlePolicy)
+
+	built := map[string]bool{"/": true, "/users": true, "/policy": true}
 	for _, link := range navLinks {
 		if built[link.Path] {
 			continue
@@ -331,6 +335,7 @@ type pageData struct {
 	Principal *identity.Principal
 	Overview  *overviewData
 	Users     *usersView
+	Policy    *policyView
 	Body      any
 }
 

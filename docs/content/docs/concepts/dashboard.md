@@ -73,6 +73,26 @@ came from the dashboard itself: its `Origin` (or, failing that, `Referer`)
 must be loopback. A cross-site or origin-less POST is refused with `403`
 before it ever reaches the remote API.
 
+## The policy page (Cedar structured viewer)
+
+`/policy` is a **read-only** view of the authorization policy your
+deployment enforces. It reads the policy IR — the same intermediate
+representation [Cedar](policy) compiles to policy text — from
+[`GET /api/policy`](server) and renders it two ways for human review:
+
+- a **grid per entity**: rows are roles, columns are the five actions
+  (read, list, create, update, delete), each cell marking allowed or not,
+  with a column for the PII categories that role sees in plaintext on a
+  read or list;
+- **plain-language statements**, one per role-with-access on each entity
+  (e.g. *"admin can read, delete patient; reads reveal private_person"*),
+  so a non-technical reviewer can read the policy as prose.
+
+This is V1 of the Cedar UI and a deliberate baby-step toward a future
+structured *editor*: it reads the exact IR that editor will edit, so
+nothing here is throwaway. There is **no free-form editor** — authoring
+Cedar stays a reviewed pull request, outside the constrained IR.
+
 ## Why it runs locally
 
 A remote web app drags XSS, CSRF, session, and template attack surface

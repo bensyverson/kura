@@ -616,6 +616,18 @@ h3 {
    review-only token (no new hue introduced). */
 .badge-auditor { background: var(--badge-consultant-bg); color: var(--badge-consultant-fg); }
 
+/* ── Cedar policy viewer ────────────────────────────────────────── */
+.statements {
+  margin: var(--space-3) 0 0;
+  padding-left: var(--space-5);
+}
+.statements li { margin: var(--space-1) 0; }
+
+.grid th.grid-act { text-align: center; }
+.grid .grid-cell { text-align: center; font-variant-numeric: tabular-nums; }
+.grid .yes { color: var(--accent); font-weight: 700; }
+.grid .no { color: var(--text-muted); }
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 44rem) {
   .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }

@@ -18,7 +18,7 @@ var staticFS embed.FS
 
 // pageTemplates are the named page bodies rendered through the base
 // layout. Each file defines a "content" block the layout slots in.
-var pageTemplates = []string{"index", "users", "signin", "placeholder", "error"}
+var pageTemplates = []string{"index", "users", "policy", "signin", "placeholder", "error"}
 
 // parseTemplates builds one fully-resolved template set per page: the
 // base layout cloned and combined with that page's "content" block.

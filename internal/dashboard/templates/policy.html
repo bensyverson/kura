@@ -1,0 +1,55 @@
+{{define "content"}}
+{{with .Policy}}
+{{$pv := .}}
+<section class="panel">
+  <span class="eyebrow">Authorization</span>
+  <h1>Policy</h1>
+  <p class="lede">A read-only view of the authorization policy your deployment enforces — which roles may take which actions on which data, and what PII each role sees in plaintext. This is the same structured model (the IR) a future editor will edit; for now, authoring stays a reviewed pull request.</p>
+
+  {{with .Roles}}
+  <h3>Roles</h3>
+  <dl class="facts">
+    {{range .}}
+    <dt><span class="badge badge-{{.Name}}">{{.Name}}</span></dt><dd>{{.Description}}</dd>
+    {{end}}
+  </dl>
+  {{end}}
+
+  {{with .Statements}}
+  <h3>In plain language</h3>
+  <ul class="statements">
+    {{range .}}<li>{{.}}</li>{{end}}
+  </ul>
+  {{end}}
+
+  {{if not $pv.Entities}}
+  <p class="muted">No policy is currently loaded.</p>
+  {{end}}
+</section>
+
+{{range $e := $pv.Entities}}
+<section class="panel">
+  <span class="eyebrow">Entity</span>
+  <h2 class="mono">{{$e.Entity}}</h2>
+  <table class="table grid">
+    <thead>
+      <tr>
+        <th>Role</th>
+        {{range $pv.Actions}}<th class="grid-act">{{.}}</th>{{end}}
+        <th>Visible PII (reads &amp; lists)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {{range $r := $e.Rows}}
+      <tr>
+        <td><span class="badge badge-{{$r.Role}}">{{$r.Role}}</span></td>
+        {{range $c := $r.Cells}}<td class="grid-cell">{{if $c}}<span class="yes" title="allowed">&#10003;</span>{{else}}<span class="no" title="not allowed" aria-label="not allowed">&mdash;</span>{{end}}</td>{{end}}
+        <td class="mono">{{if $r.VisiblePII}}{{range $i, $p := $r.VisiblePII}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}<span class="muted">none — all masked</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+</section>
+{{end}}
+{{end}}
+{{end}}
