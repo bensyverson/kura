@@ -50,12 +50,22 @@ than issuer-as-tenant.
 
 ## What `email_verified` must be
 
-Kura **rejects** any id_token whose `email_verified` claim is missing
-or false. We require the IdP to have proven the email, not merely
+Kura **rejects** any id_token whose `email_verified` claim resolves to
+false. We require the IdP to have proven the email, not merely
 transcribed it.
 
-This bit us in both reference vendors during validation. The fix is at
-the IdP, not at Kura:
+Some IdPs (notably Zitadel) default to a **minimal id_token + rich
+userinfo** layout — the id_token doesn't carry `email_verified` at all
+and the relying party is expected to call `/userinfo` for it. Kura
+handles this transparently: when the id_token lacks the
+`email_verified` claim, Kura calls the OIDC `/userinfo` endpoint
+(authenticated with the access_token from the same exchange) and uses
+the verified-email assertion from there. No operator toggle is needed.
+
+An **explicit** `email_verified=false` from the id_token is treated as
+a definitive negative — Kura does not re-check it via `/userinfo`,
+because overriding the IdP's explicit "no" would silently downgrade
+its assertion. To resolve an unverified email, fix it at the IdP:
 
 - **Keycloak** — set `emailVerified: true` on the user in the realm,
   or set `verifyEmail: true` on the realm so the flow forces a

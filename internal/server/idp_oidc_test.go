@@ -10,6 +10,13 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// boolp is a one-liner pointer to a bool, used in tests so oidcClaims
+// literals can spell out "email_verified was present in the id_token
+// with this value" vs "email_verified was absent" (nil).
+//
+//go:fix inline
+func boolp(b bool) *bool { return new(b) }
+
 // fakeOIDCVerifier stands in for go-oidc's id-token verifier so
 // oidcIdP's claim mapping is testable without a live IdP and JWKS
 // endpoint.
@@ -25,6 +32,24 @@ func (f *fakeOIDCVerifier) Verify(_ context.Context, _ string) (oidcClaims, erro
 	return f.claims, nil
 }
 
+// fakeUserinfoFetcher stands in for a real OIDC /userinfo call so the
+// id_token-lacks-email_verified fallback is testable without a live
+// IdP. It records how many times it was invoked so tests can prove the
+// fallback was (or wasn't) triggered.
+type fakeUserinfoFetcher struct {
+	claims oidcClaims
+	err    error
+	calls  int
+}
+
+func (f *fakeUserinfoFetcher) Fetch(_ context.Context, _ *oauth2.Token) (oidcClaims, error) {
+	f.calls++
+	if f.err != nil {
+		return oidcClaims{}, f.err
+	}
+	return f.claims, nil
+}
+
 // A verified id_token's claims map onto VerifiedIdentity: email →
 // Email (lowercased), and both Tenant and Issuer get the configured
 // IssuerURL (vanilla OIDC has no tenant claim; the issuer URL is the
@@ -32,7 +57,7 @@ func (f *fakeOIDCVerifier) Verify(_ context.Context, _ string) (oidcClaims, erro
 func TestOIDCIdPMapsClaimsToVerifiedIdentity(t *testing.T) {
 	v := &fakeOIDCVerifier{claims: oidcClaims{
 		Email:         "Alex@ExampleFirm.com",
-		EmailVerified: true,
+		EmailVerified: new(true),
 	}}
 	idp := &oidcIdP{
 		issuerURL: "https://auth.examplefirm.com",
@@ -59,7 +84,7 @@ func TestOIDCIdPMapsClaimsToVerifiedIdentity(t *testing.T) {
 func TestOIDCIdPRejectsUnverifiedEmail(t *testing.T) {
 	v := &fakeOIDCVerifier{claims: oidcClaims{
 		Email:         "alex@examplefirm.com",
-		EmailVerified: false,
+		EmailVerified: new(false),
 	}}
 	idp := &oidcIdP{issuerURL: "https://auth.examplefirm.com", verifier: v}
 	_, err := idp.verifyAndMap(context.Background(), "raw")
@@ -76,7 +101,7 @@ func TestOIDCIdPRejectsUnverifiedEmail(t *testing.T) {
 // identity.)
 func TestOIDCIdPRejectsTokenWithoutEmailClaim(t *testing.T) {
 	v := &fakeOIDCVerifier{claims: oidcClaims{
-		EmailVerified: true,
+		EmailVerified: new(true),
 	}}
 	idp := &oidcIdP{issuerURL: "https://auth.examplefirm.com", verifier: v}
 	_, err := idp.verifyAndMap(context.Background(), "raw")
@@ -114,7 +139,7 @@ func TestOIDCIdPEmbedsClaimsInRejectionError(t *testing.T) {
 
 	v := &fakeOIDCVerifier{claims: oidcClaims{
 		Email:         "alex@examplefirm.com",
-		EmailVerified: false,
+		EmailVerified: new(false),
 	}}
 	idp := &oidcIdP{issuerURL: "https://auth.examplefirm.com", verifier: v}
 	_, err := idp.verifyAndMap(context.Background(), rawJWT)
@@ -162,5 +187,145 @@ func TestOIDCIdPAuthCodeURLEmbedsState(t *testing.T) {
 	}
 	if !strings.Contains(got, "state=state-xyz") {
 		t.Errorf("AuthCodeURL = %q, want state=state-xyz in the querystring", got)
+	}
+}
+
+// Zitadel and other IdPs that default to "minimal id_token + rich
+// userinfo" emit id_tokens that don't carry email_verified at all. When
+// the id_token lacks the email_verified claim, oidcIdP must fall back to
+// the /userinfo endpoint (authenticated with the access_token) to fetch
+// it. A merged claim set with email_verified=true is then accepted.
+func TestOIDCIdPFallsBackToUserinfoWhenIDTokenLacksEmailVerified(t *testing.T) {
+	v := &fakeOIDCVerifier{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: nil, // absent from the id_token
+	}}
+	ui := &fakeUserinfoFetcher{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: new(true),
+	}}
+	idp := &oidcIdP{
+		issuerURL: "https://auth.examplefirm.com",
+		verifier:  v,
+		userinfo:  ui,
+	}
+	got, err := idp.resolveIdentity(context.Background(), "raw", &oauth2.Token{AccessToken: "at"})
+	if err != nil {
+		t.Fatalf("resolveIdentity: %v", err)
+	}
+	if ui.calls != 1 {
+		t.Errorf("expected exactly 1 /userinfo call, got %d", ui.calls)
+	}
+	if got.Email != "alex@examplefirm.com" {
+		t.Errorf("Email = %q, want alex@examplefirm.com", got.Email)
+	}
+}
+
+// If userinfo also reports email_verified=false (or never sets it), the
+// caller has not proven the email — reject. The fallback is a permission
+// to *look harder*, not a permission to *override* a definitive false.
+func TestOIDCIdPRejectsWhenUserinfoStillLacksVerifiedEmail(t *testing.T) {
+	v := &fakeOIDCVerifier{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: nil,
+	}}
+	ui := &fakeUserinfoFetcher{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: new(false),
+	}}
+	idp := &oidcIdP{
+		issuerURL: "https://auth.examplefirm.com",
+		verifier:  v,
+		userinfo:  ui,
+	}
+	_, err := idp.resolveIdentity(context.Background(), "raw", &oauth2.Token{AccessToken: "at"})
+	if err == nil {
+		t.Fatal("expected rejection when userinfo also lacks a verified email")
+	}
+	if ui.calls != 1 {
+		t.Errorf("expected exactly 1 /userinfo call, got %d", ui.calls)
+	}
+}
+
+// If the id_token already carries a definitive email_verified claim
+// (true or false), oidcIdP must NOT call /userinfo. An explicit false
+// is a definitive statement from the IdP and overriding it via a second
+// endpoint would be a downgrade; an explicit true means we already have
+// the proof and a second call is wasted latency.
+func TestOIDCIdPDoesNotCallUserinfoWhenIDTokenSettlesEmailVerified(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		emv  *bool
+	}{
+		{"verified=true settles it", new(true)},
+		{"verified=false settles it", new(false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := &fakeOIDCVerifier{claims: oidcClaims{
+				Email:         "alex@examplefirm.com",
+				EmailVerified: tc.emv,
+			}}
+			ui := &fakeUserinfoFetcher{err: errors.New("must not be called")}
+			idp := &oidcIdP{
+				issuerURL: "https://auth.examplefirm.com",
+				verifier:  v,
+				userinfo:  ui,
+			}
+			_, _ = idp.resolveIdentity(context.Background(), "raw", &oauth2.Token{AccessToken: "at"})
+			if ui.calls != 0 {
+				t.Errorf("expected zero /userinfo calls when id_token settles email_verified, got %d", ui.calls)
+			}
+		})
+	}
+}
+
+// When the id_token is missing the email claim itself (Zitadel's
+// minimal-id_token mode can produce this), the /userinfo response's
+// email must fill it in. The merged identity carries that email
+// (lowercased) on success.
+func TestOIDCIdPMergesEmailFromUserinfoWhenIDTokenLacksIt(t *testing.T) {
+	v := &fakeOIDCVerifier{claims: oidcClaims{
+		Email:         "",
+		EmailVerified: nil,
+	}}
+	ui := &fakeUserinfoFetcher{claims: oidcClaims{
+		Email:         "Alex@ExampleFirm.com",
+		EmailVerified: new(true),
+	}}
+	idp := &oidcIdP{
+		issuerURL: "https://auth.examplefirm.com",
+		verifier:  v,
+		userinfo:  ui,
+	}
+	got, err := idp.resolveIdentity(context.Background(), "raw", &oauth2.Token{AccessToken: "at"})
+	if err != nil {
+		t.Fatalf("resolveIdentity: %v", err)
+	}
+	if got.Email != "alex@examplefirm.com" {
+		t.Errorf("Email = %q, want alex@examplefirm.com (sourced from userinfo, lowercased)", got.Email)
+	}
+}
+
+// A /userinfo fetch failure (network, 401, malformed JSON) must
+// propagate as a verification error — Kura's identity-resolution path
+// must not paper over the IdP being unreachable.
+func TestOIDCIdPPropagatesUserinfoError(t *testing.T) {
+	boom := errors.New("userinfo: 503 service unavailable")
+	v := &fakeOIDCVerifier{claims: oidcClaims{
+		Email:         "alex@examplefirm.com",
+		EmailVerified: nil,
+	}}
+	ui := &fakeUserinfoFetcher{err: boom}
+	idp := &oidcIdP{
+		issuerURL: "https://auth.examplefirm.com",
+		verifier:  v,
+		userinfo:  ui,
+	}
+	_, err := idp.resolveIdentity(context.Background(), "raw", &oauth2.Token{AccessToken: "at"})
+	if err == nil {
+		t.Fatal("expected an error when userinfo fetch fails")
+	}
+	if !errors.Is(err, boom) {
+		t.Errorf("error chain should wrap the userinfo fetcher's error, got %v", err)
 	}
 }
