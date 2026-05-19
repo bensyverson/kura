@@ -1,0 +1,15 @@
+{{define "content"}}
+<section class="panel">
+  <span class="eyebrow">Dashboard</span>
+  <h1>Overview</h1>
+  <p class="lede">You are signed in to the Kura dashboard — the local, loopback-bound view onto your secure data store.</p>
+  {{with .Principal}}
+  <dl class="facts">
+    <dt>Signed in as</dt><dd>{{.Email}}</dd>
+    <dt>Principal type</dt><dd><span class="badge badge-{{.Type}}">{{.Type}}</span></dd>
+    <dt>Tenant</dt><dd>{{if .Tenant}}{{.Tenant}}{{else}}<span class="muted">—</span>{{end}}</dd>
+  </dl>
+  {{end}}
+  <p class="muted">System status, record and user counts, and the needs-attention panel arrive with the Overview build. This skeleton confirms the dashboard serves locally and reads through the remote API.</p>
+</section>
+{{end}}

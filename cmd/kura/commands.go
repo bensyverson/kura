@@ -43,7 +43,7 @@ func newRootCmd() *cobra.Command {
 	// verbs (phase 3). All stubs for now; each phase replaces its own.
 	cmd.AddCommand(newStatusCmd())
 	cmd.AddCommand(newServeCmd())
-	cmd.AddCommand(newStubCmd("dashboard", "Run the local web dashboard (loopback-bound HTTP client)"))
+	cmd.AddCommand(newDashboardCmd())
 	cmd.AddCommand(newStubCmd("mcp", "Run the MCP server (local stdio proxy by default)"))
 	cmd.AddCommand(newLoginCmd())
 	cmd.AddCommand(newLogoutCmd())

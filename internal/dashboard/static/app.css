@@ -1,0 +1,335 @@
+/* Kura dashboard — one stylesheet, zero dependencies, system fonts.
+ *
+ * Design concept: "kura" (蔵), the traditional Japanese fireproof
+ * storehouse the project is named for — thick plaster walls, dark timber,
+ * a calm and trustworthy vault for what matters. The light theme is warm
+ * plaster; the dark theme is sumi ink. Indigo (藍) is the single confident
+ * accent; vermilion (朱) is reserved strictly for things that need
+ * attention. Distinction here comes from precision and restraint, not
+ * ornament — this is an instrument for people who audit access to PII.
+ *
+ * The design language lives in custom properties so later pages inherit
+ * it rather than reinventing it. No inline styles anywhere. */
+
+:root {
+  color-scheme: light dark;
+
+  /* Type — system stack only, by constraint. Character comes from
+     weight, tracking, and tabular figures rather than a typeface. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+
+  /* Modular spacing scale */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+  --space-8: 3rem;
+
+  --radius: 0.4rem;
+  --radius-sm: 0.25rem;
+  --maxw: 66rem;
+  --hairline: 1px;
+
+  /* Light — warm plaster */
+  --bg: #e7e0d2;
+  --surface: #faf6ee;
+  --surface-2: #f0e9da;
+  --border: #d6ccb8;
+  --border-strong: #c2b69d;
+  --text: #211f19;
+  --text-muted: #6a6253;
+  --accent: #294a72;          /* 藍 indigo */
+  --accent-weak: #e2e6ee;
+  --accent-contrast: #faf6ee;
+  --alert: #a8412a;           /* 朱 vermilion — attention only */
+  --alert-weak: #f3e1da;
+  --shadow: 0 1px 1px rgba(33, 28, 16, 0.04), 0 4px 14px rgba(33, 28, 16, 0.06);
+  --shadow-sm: 0 1px 2px rgba(33, 28, 16, 0.07);
+
+  /* Principal-type badges — muted traditional pigments */
+  --badge-admin-bg: #f1ddd3;       --badge-admin-fg: #8c3a22;   /* 朱 */
+  --badge-consultant-bg: #dde3ee;  --badge-consultant-fg: #294a72; /* 藍 */
+  --badge-user-bg: #dde8da;        --badge-user-fg: #3c5a36;     /* 萌黄 */
+  --badge-service-bg: #e5dfec;     --badge-service-fg: #574171;  /* 紫 */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Dark — sumi ink */
+    --bg: #16150f;
+    --surface: #201e17;
+    --surface-2: #29261d;
+    --border: #38342a;
+    --border-strong: #4a4537;
+    --text: #ece5d5;
+    --text-muted: #a59a85;
+    --accent: #8eaed6;
+    --accent-weak: #25303f;
+    --accent-contrast: #16150f;
+    --alert: #e08163;
+    --alert-weak: #3a241c;
+    --shadow: 0 1px 1px rgba(0, 0, 0, 0.4), 0 6px 18px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+
+    --badge-admin-bg: #3d251c;       --badge-admin-fg: #ec9a7e;
+    --badge-consultant-bg: #233141;  --badge-consultant-fg: #9cbdea;
+    --badge-user-bg: #25331f;        --badge-user-fg: #9ac88c;
+    --badge-service-bg: #2e2740;     --badge-service-fg: #c0a9e6;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { font-family: var(--font-sans); -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  /* A whisper of plaster grain: two offset radial tints, no image asset. */
+  background-image:
+    radial-gradient(circle at 18% 12%, rgba(41, 74, 114, 0.04), transparent 42%),
+    radial-gradient(circle at 92% 0%, rgba(168, 65, 42, 0.03), transparent 38%);
+  background-attachment: fixed;
+  color: var(--text);
+  font-size: 0.97rem;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 0.15em; }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.skip-link {
+  position: absolute;
+  left: -999px;
+  top: var(--space-2);
+  background: var(--surface);
+  color: var(--text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: var(--hairline) solid var(--border-strong);
+  z-index: 10;
+}
+.skip-link:focus { left: var(--space-3); }
+
+/* ── Top bar + nav ──────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  padding: var(--space-3) var(--space-5);
+  background: var(--surface);
+  border-bottom: var(--hairline) solid var(--border);
+  /* The thin indigo line under the bar is the storehouse's timber sill. */
+  box-shadow: inset 0 -2px 0 0 var(--accent);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  color: var(--text);
+}
+.brand:hover { text-decoration: none; }
+.brand-mark {
+  font-size: 1.05rem;
+  font-weight: 400;
+  color: var(--accent);
+  line-height: 1;
+  transform: translateY(0.05em);
+}
+
+.nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  flex: 1;
+}
+.nav a {
+  position: relative;
+  color: var(--text-muted);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
+.nav a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 600;
+}
+/* Active page wears an indigo underline tab. */
+.nav a[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: var(--space-3);
+  right: var(--space-3);
+  bottom: -0.65rem;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+}
+
+.session {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.86rem;
+}
+.session-email { color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+/* ── Content ────────────────────────────────────────────────────── */
+.content {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-5);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .content { animation: rise 0.4s cubic-bezier(0.16, 1, 0.3, 1) both; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+  }
+}
+
+.panel {
+  position: relative;
+  background: var(--surface);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: var(--space-6) var(--space-6) var(--space-8);
+  overflow: hidden;
+}
+/* The vault seam: a hairline indigo rule down the binding edge. */
+.panel::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: var(--accent);
+  opacity: 0.85;
+}
+.panel-narrow { max-width: 40rem; }
+
+.eyebrow {
+  display: block;
+  margin: 0 0 var(--space-2);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+h1 {
+  margin: 0 0 var(--space-3);
+  font-size: 1.5rem;
+  font-weight: 680;
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+}
+
+.lede { margin-top: 0; font-size: 1.04rem; color: var(--text); max-width: 46rem; }
+.muted { color: var(--text-muted); }
+p { max-width: 50rem; }
+
+/* ── Facts (definition list) ────────────────────────────────────── */
+.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: var(--space-3) var(--space-6);
+  margin: var(--space-6) 0;
+  padding: var(--space-5) 0;
+  border-top: var(--hairline) solid var(--border);
+  border-bottom: var(--hairline) solid var(--border);
+}
+.facts dt {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  align-self: center;
+}
+.facts dd { margin: 0; font-variant-numeric: tabular-nums; font-size: 1.02rem; }
+
+/* ── Badges ─────────────────────────────────────────────────────── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: 0.76rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: capitalize;
+  background: var(--surface-2);
+  color: var(--text-muted);
+}
+.badge-admin { background: var(--badge-admin-bg); color: var(--badge-admin-fg); }
+.badge-consultant { background: var(--badge-consultant-bg); color: var(--badge-consultant-fg); }
+.badge-user { background: var(--badge-user-bg); color: var(--badge-user-fg); }
+.badge-service { background: var(--badge-service-bg); color: var(--badge-service-fg); }
+
+/* ── Command blocks ─────────────────────────────────────────────── */
+.cmd {
+  position: relative;
+  background: var(--surface-2);
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: 0.88rem;
+  line-height: 1.5;
+  margin: var(--space-4) 0;
+  color: var(--text);
+}
+.cmd code { font-family: inherit; }
+
+/* kura-copy progressive enhancement */
+kura-copy { display: block; position: relative; }
+kura-copy .copy-btn {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  font: inherit;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  padding: var(--space-1) var(--space-2);
+  background: var(--surface);
+  color: var(--text-muted);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+kura-copy .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── Responsive ─────────────────────────────────────────────────── */
+@media (max-width: 44rem) {
+  .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+  .nav { order: 3; width: 100%; }
+  .nav a[aria-current="page"]::after { bottom: -0.2rem; }
+  .content { padding: var(--space-6) var(--space-4); }
+  .panel { padding: var(--space-5) var(--space-5) var(--space-6); }
+  .facts { grid-template-columns: 1fr; gap: var(--space-1); }
+  .facts dt { margin-top: var(--space-3); }
+}

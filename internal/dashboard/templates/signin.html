@@ -1,0 +1,12 @@
+{{define "content"}}
+<section class="panel panel-narrow">
+  <span class="eyebrow">Authentication</span>
+  <h1>Sign in required</h1>
+  <p>The dashboard could not find a valid session for the remote Kura server.</p>
+  <p>From your terminal, run:</p>
+  <kura-copy>
+    <pre class="cmd"><code>kura login --server &lt;your-kura-server-url&gt;</code></pre>
+  </kura-copy>
+  <p class="muted">Then reload this page. The dashboard reads your cached login token server-side; it never asks for credentials in the browser, and the token never reaches this page.</p>
+</section>
+{{end}}

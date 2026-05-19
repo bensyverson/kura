@@ -28,13 +28,15 @@ func TestRootHelpListsCommandTree(t *testing.T) {
 }
 
 // Stub verbs must fail loudly rather than silently succeeding, so no
-// caller mistakes an unimplemented surface for a working one.
+// caller mistakes an unimplemented surface for a working one. The test
+// exercises the stub mechanism directly rather than naming a specific
+// verb, so it stays valid as each phase replaces its own stub with a
+// real command.
 func TestStubVerbReportsNotImplemented(t *testing.T) {
-	cmd := newRootCmd()
+	cmd := newStubCmd("example", "A surface wired into the tree but not yet built")
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&out)
-	cmd.SetArgs([]string{"dashboard"})
 	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected stub verb to return an error, got nil")

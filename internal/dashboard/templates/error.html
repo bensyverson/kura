@@ -1,0 +1,9 @@
+{{define "content"}}
+<section class="panel panel-narrow">
+  <span class="eyebrow">Connection</span>
+  <h1>Could not reach the Kura server</h1>
+  <p>The dashboard could not complete a request to the remote API.</p>
+  {{with .Body}}<pre class="cmd"><code>{{.}}</code></pre>{{end}}
+  <p class="muted">Check that the server URL is correct and the server is reachable, then reload.</p>
+</section>
+{{end}}
