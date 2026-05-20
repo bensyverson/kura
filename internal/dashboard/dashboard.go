@@ -172,7 +172,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /data/{entity}", s.handleDataList)
 	mux.HandleFunc("GET /data/{entity}/{id}", s.handleDataRecord)
 
-	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true, "/data": true}
+	// The Programmatic-access page is built: static reference for the CLI,
+	// HTTP API, and MCP surfaces plus the token-issuance flow.
+	mux.HandleFunc("GET /help", s.handleHelp)
+
+	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true, "/data": true, "/help": true}
 	for _, link := range navLinks {
 		if built[link.Path] {
 			continue
@@ -350,6 +354,7 @@ type pageData struct {
 	DataIndex  *dataIndexView
 	DataList   *dataListView
 	DataRecord *dataRecordView
+	Help       *helpView
 	Body       any
 }
 

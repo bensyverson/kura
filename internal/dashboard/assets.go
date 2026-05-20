@@ -21,7 +21,7 @@ var staticFS embed.FS
 var pageTemplates = []string{
 	"index", "users", "policy", "audit",
 	"data_index", "data_list", "data_record",
-	"signin", "placeholder", "notfound", "error",
+	"help", "signin", "placeholder", "notfound", "error",
 }
 
 // parseTemplates builds one fully-resolved template set per page: the

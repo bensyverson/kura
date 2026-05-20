@@ -142,6 +142,28 @@ field value, by the shape of the audit `Event` type. Reading the log is
 itself an audited `AdminReview` event, so a non-admin/auditor gets the
 sign-in or permission path, never the data.
 
+## The programmatic-access page
+
+`/help` is static reference for driving Kura **without** the dashboard. It
+documents the three machine surfaces and how to authenticate to each:
+
+- the **token-issuance flow** — `kura login --server <url>` runs the
+  OAuth/OIDC handoff and caches a short-lived bearer token locally, which
+  the CLI then attaches to every request automatically;
+- the **CLI** — the `kura` verbs (`status`, `whoami`, `query`, `show`,
+  `log`), masked and audited exactly as the dashboard is;
+- the **HTTP API** — the same JSON API the dashboard and CLI are clients
+  of, called directly with an `Authorization: Bearer` token against the
+  configured server's `/api/` base;
+- the **MCP server** — `kura mcp`, documented as the forthcoming
+  agent surface (Phase 5) that projects the same gated operations as MCP
+  tools;
+- **`kura agent-context`** — the machine-readable command catalog for
+  agents.
+
+It surfaces the deployment's own server URL so the examples are concrete,
+and — like every page — never the bearer token.
+
 ## Why it runs locally
 
 A remote web app drags XSS, CSRF, session, and template attack surface

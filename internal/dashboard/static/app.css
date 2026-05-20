@@ -696,6 +696,9 @@ h3 {
    personal data is exactly the kind of thing a reviewer should notice. */
 .badge-pii { background: var(--alert-weak); color: var(--alert); text-transform: none; }
 
+/* A quiet "coming soon" marker for a documented-but-unshipped surface. */
+.badge-soon { background: var(--surface-2); color: var(--text-muted); text-transform: none; font-weight: 600; }
+
 /* Wide record tables scroll horizontally rather than overflowing the panel. */
 .table-scroll { overflow-x: auto; margin-top: var(--space-4); }
 .table-scroll .table { margin-top: 0; }

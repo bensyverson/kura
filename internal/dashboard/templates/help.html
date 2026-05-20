@@ -1,0 +1,73 @@
+{{define "content"}}
+{{with .Help}}
+<section class="panel">
+  <span class="eyebrow">Programmatic access</span>
+  <h1>Use Kura without the dashboard</h1>
+  <p class="lede">Everything you do here you can do from a terminal, a script, or an AI agent — against the same API, with the same authorization, masking, and audit. This page shows the three machine surfaces and how to authenticate to them.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Step one</span>
+  <h2>Get a token</h2>
+  <p>Every surface authenticates with a short-lived bearer <strong>token</strong>. You issue your own by signing in through your identity provider:</p>
+  <kura-copy>
+    <pre class="cmd"><code>kura login --server {{.ServerURL}}</code></pre>
+  </kura-copy>
+  <p class="muted">This opens your browser for the OAuth/OIDC handoff, then caches the token locally (owner-readable only). The CLI attaches it to every request automatically — you never paste it anywhere. The token is short-lived; when it expires, run <code>kura login</code> again. The dashboard you are reading uses this very same cached token, server-side.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Surface one</span>
+  <h2>The CLI</h2>
+  <p>The <code>kura</code> binary is the primary interface. After <code>kura login</code>, orient yourself and read data — all output is Markdown by default, or <code>--json</code> for scripts:</p>
+  <kura-copy>
+    <pre class="cmd"><code>kura status            # identity + landscape briefing
+kura whoami            # the principal the server resolves you to
+kura query patient     # a masked, bounded page of records
+kura show patient p1   # one masked record
+kura log --actor alex@client.example   # filter the audit log</code></pre>
+  </kura-copy>
+  <p class="muted">Reads are masked to your roles and every access is audited, exactly as in this dashboard. See the <em>Machine interface</em> section of the documentation for every verb.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Surface two</span>
+  <h2>The HTTP API</h2>
+  <p>The CLI and this dashboard are both just clients of the JSON API <code>kura serve</code> exposes. Call it directly by sending your token as a bearer credential. The API base is:</p>
+  <kura-copy>
+    <pre class="cmd"><code>{{.ServerURL}}/api/</code></pre>
+  </kura-copy>
+  <p>Every request carries the token in the <code>Authorization</code> header:</p>
+  <kura-copy>
+    <pre class="cmd"><code>curl -H "Authorization: Bearer &lt;token&gt;" \
+  {{.ServerURL}}/api/whoami
+
+curl -H "Authorization: Bearer &lt;token&gt;" \
+  "{{.ServerURL}}/api/patient?limit=50"
+
+curl -H "Authorization: Bearer &lt;token&gt;" \
+  {{.ServerURL}}/api/patient/p1</code></pre>
+  </kura-copy>
+  <p class="muted">The server masks every field and records every access on its side — there is no unmasked or unaudited path onto the data, whichever client you use.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Surface three</span>
+  <h2>The MCP server <span class="badge badge-soon">coming soon</span></h2>
+  <p>For AI agents, <code>kura mcp</code> will expose the same gated operations as Model Context Protocol tools, so an assistant can query and act on your store under the same authorization, masking, and audit as any other client — no separate, weaker path to the data.</p>
+  <kura-copy>
+    <pre class="cmd"><code>kura mcp   # arrives in a later release (Phase 5)</code></pre>
+  </kura-copy>
+  <p class="muted">It will project from the same core operations registry as the CLI and the API, so its tools stay behaviorally identical to the verbs above.</p>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">For agents</span>
+  <h2>Self-describing commands</h2>
+  <p>So an agent need not scrape <code>--help</code>, <code>kura agent-context</code> emits a versioned, machine-readable JSON description of every command, flag, and surface Kura exposes:</p>
+  <kura-copy>
+    <pre class="cmd"><code>kura agent-context</code></pre>
+  </kura-copy>
+</section>
+{{end}}
+{{end}}
