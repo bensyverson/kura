@@ -6,6 +6,9 @@ name: CI
 # policy checks, terraform plan snapshots).
 on:
   push:
+    # Branches only — tag pushes are handled by release.yml, which runs the
+    # same gate; without this filter a v* tag would double-trigger CI.
+    branches: ["**"]
   pull_request:
 
 # Least privilege: jobs get a read-only token unless they opt into more.
