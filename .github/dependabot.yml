@@ -1,0 +1,26 @@
+# Dependabot keeps dependencies and pinned GitHub Actions current.
+# Action SHAs are pinned in the workflows; the github-actions ecosystem
+# below bumps those pins (and their version comments) as new releases ship.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch

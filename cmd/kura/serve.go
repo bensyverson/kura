@@ -91,6 +91,13 @@ Configuration is read from the environment:
                              https://kura.client.example (required)
   KURA_FIRM_DOMAIN           the consulting firm's Workspace domain;
                              humans on it are Consultants (required)
+  KURA_DIRECTORY             set to "none" to disable IdP-mismatch
+                             detection: the directory becomes a no-op that
+                             reports every account active and never dials
+                             out. Use it for a deployment without
+                             directory-API access, or the offline dev
+                             instance. When unset, the directory is the one
+                             paired with KURA_IDP
   KURA_PII_DETECTOR_URL      base URL of the self-hosted PII detection
                              service (required)
   KURA_CLIENT_DOMAINS        comma-separated client Workspace domains;
@@ -467,6 +474,15 @@ func buildIdP(getenv func(string) string, redirectURL string) (server.IdentityPr
 // (the endpoint serves a consistent empty result rather than a
 // transport error).
 func buildDirectory(getenv func(string) string) (identity.Directory, error) {
+	// KURA_DIRECTORY=none opts out of IdP-mismatch detection entirely,
+	// independent of the sign-in IdP: the noop directory reports every
+	// account active and never dials out. It is the path for a deployment
+	// without directory-API access — and the offline dev instance, where
+	// no real Workspace/Entra directory is reachable.
+	if strings.ToLower(strings.TrimSpace(getenv("KURA_DIRECTORY"))) == "none" {
+		return server.NewNoopDirectory(), nil
+	}
+
 	kind := strings.ToLower(strings.TrimSpace(getenv("KURA_IDP")))
 	required := func(key string) (string, error) {
 		if v := getenv(key); v != "" {

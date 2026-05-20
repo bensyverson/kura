@@ -26,6 +26,12 @@ interface — `Detect(text) → []Span` — with two implementations:
 - **`ServiceDetector`** — the real client: an HTTP client for the self-hosted service.
 - **`FakeDetector`** — an in-memory implementation for unit tests, so the core's tests
   never require the live service.
+- **`PatternDetector`** — a regex-based implementation for development and offline use:
+  it detects emails, phone numbers, and US SSNs (as the high-sensitivity
+  `account_number` category). It is **not** the real model — it exists so a local Kura
+  can scan, classify, and mask without standing up the Privacy Filter service. `kura dev
+  pii-detector` serves it over the same JSON contract below; see the
+  [local dev instance](../getting-started/local-development).
 
 A `Span` is the structured metadata for one detected occurrence: **category, offset,
 length, and confidence**.

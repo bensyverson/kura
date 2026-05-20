@@ -103,6 +103,47 @@ func TestServeConfigGoogleBuildsDirectory(t *testing.T) {
 	}
 }
 
+// KURA_DIRECTORY=none wires the noop directory regardless of the IdP, so
+// a deployment without directory-API access (or a local dev instance) can
+// opt out of IdP-mismatch detection. The noop directory reports every
+// account active and never dials out.
+func TestServeConfigDirectoryNoneWiresNoopDirectory(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DIRECTORY"] = "none"
+	// The google directory credentials must not be required on this path.
+	delete(env, "KURA_GOOGLE_DIRECTORY_CREDENTIALS")
+	delete(env, "KURA_GOOGLE_DIRECTORY_SUBJECT")
+
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig with KURA_DIRECTORY=none: %v", err)
+	}
+	if cfg.IdP == nil {
+		t.Fatal("serveConfig left cfg.IdP nil")
+	}
+	got, err := cfg.IdP.AccountStatus(context.Background(), "anyone@anywhere.example")
+	if err != nil {
+		t.Fatalf("AccountStatus: %v", err)
+	}
+	if got != identity.AccountActive {
+		t.Errorf("AccountStatus = %q, want %q (noop directory) — KURA_DIRECTORY=none did not select noop", got, identity.AccountActive)
+	}
+}
+
+// With KURA_DIRECTORY=none, the Google directory env vars are not read, so
+// their absence is not an error.
+func TestServeConfigDirectoryNoneSkipsGoogleDirectoryVars(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DIRECTORY"] = "none"
+	delete(env, "KURA_GOOGLE_DIRECTORY_CREDENTIALS")
+	delete(env, "KURA_GOOGLE_DIRECTORY_SUBJECT")
+	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
+		if strings.Contains(err.Error(), "KURA_GOOGLE_DIRECTORY") {
+			t.Errorf("KURA_DIRECTORY=none must not require Google directory vars: %v", err)
+		}
+	}
+}
+
 // With KURA_IDP=oidc, the directory must be the noop directory: it
 // reports AccountActive for every email so the mismatch endpoint serves
 // a consistent (empty) result rather than a transport error. Generic

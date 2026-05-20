@@ -44,6 +44,13 @@ Two cross-IdP concerns share one shape across all three families:
     the Kura authorized-user list). Documented in
     [Generic OIDC sign-in](generic-oidc-sign-in#known-limitation-no-idp-mismatch-detection).
 
+## Run it locally
+
+Before any of that, you can stand up a complete, populated Kura on your
+own machine — Postgres, the API, seeded data, and the dashboard — with one
+command, no IdP or model service required. See
+**[Local development](local-development)**.
+
 *Coming soon.* The end-to-end deployment guide (TLS termination,
 secrets injection, the `kura init` per-client scaffold) lands as
 Phases 6 and 7 of the build plan.

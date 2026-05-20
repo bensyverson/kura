@@ -1,0 +1,23 @@
+[
+  {
+    "full_name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "phone": "555-867-5309",
+    "ssn": "123-45-6789",
+    "notes": "Prefers email. Backup contact reachable at 555-202-0143."
+  },
+  {
+    "full_name": "Grace Hopper",
+    "email": "grace@example.com",
+    "phone": "555-486-2381",
+    "ssn": "987-65-4321",
+    "notes": "VIP account. Escalations go to grace@example.com directly."
+  },
+  {
+    "full_name": "Alan Turing",
+    "email": "alan@example.com",
+    "phone": "555-114-1936",
+    "ssn": "111-22-3333",
+    "notes": "Case opened 2026-04-01. No special handling."
+  }
+]

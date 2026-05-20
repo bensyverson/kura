@@ -59,6 +59,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newTailCmd())
 	cmd.AddCommand(newJobsCmd())
 	cmd.AddCommand(newSmokeCmd())
+	cmd.AddCommand(newDevCmd())
 
 	// Operations projected from the registry — the typed-operations seam
 	// shared with MCP. Stubs above are replaced by registry entries as

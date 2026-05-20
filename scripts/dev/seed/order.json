@@ -1,0 +1,5 @@
+[
+  { "placed_at": "2026-04-12T09:30:00Z", "total_cents": "12300", "status": "shipped" },
+  { "placed_at": "2026-04-28T14:05:00Z", "total_cents": "4999", "status": "processing" },
+  { "placed_at": "2026-05-03T18:45:00Z", "total_cents": "78050", "status": "delivered" }
+]
