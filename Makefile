@@ -1,13 +1,20 @@
 BINARY := kura
 PKG    := ./cmd/kura
 
+# Build version, injected into main.version. Defaults to the git description
+# (a tag like v0.1.0 once tagged, else the short commit, +"-dirty" if the
+# tree is modified). scripts/release.sh and the release workflow pass an
+# explicit VERSION.
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -ldflags "-X main.version=$(VERSION)"
+
 .PHONY: build install run test test-integration fmt fix vet clean help
 
 build:
-	go build -o $(BINARY) $(PKG)
+	go build $(LDFLAGS) -o $(BINARY) $(PKG)
 
 install:
-	go install $(PKG)
+	go install $(LDFLAGS) $(PKG)
 
 # Usage: make run ARGS="status"
 run:
