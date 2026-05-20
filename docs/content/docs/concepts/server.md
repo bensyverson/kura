@@ -102,6 +102,11 @@ the same — authorized and audited by construction.
 | `GET /api/policy` | `AdminReview` | admin or auditor |
 | `GET /api/overview` | `AdminReview` | admin or auditor |
 | `GET /api/manifest` | `AdminReview` | admin or auditor |
+| `POST /api/reviews` | `AdminManage` | admin |
+| `GET /api/reviews` | `AdminReview` | admin or auditor |
+| `GET /api/reviews/{id}` | `AdminReview` | admin or auditor |
+| `POST /api/reviews/{id}/decisions` | `AdminManage` | admin |
+| `POST /api/reviews/{id}/complete` | `AdminManage` | admin |
 | `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
@@ -135,6 +140,15 @@ the same — authorized and audited by construction.
   against the vendor [Directory client](identity) (Google Workspace
   Admin SDK, Microsoft Graph, or a no-op for generic OIDC, picked by
   `KURA_IDP`).
+- **`/api/reviews` runs the periodic access review.** `POST /api/reviews`
+  snapshots the current authorized list into a new open review (an admin
+  action); `POST /api/reviews/{id}/decisions` records an approve/remove
+  verdict per subject; `POST /api/reviews/{id}/complete` archives the review
+  as an immutable artifact. The reads (`GET /api/reviews` and `…/{id}`) are
+  `AdminReview`, so the auditor may inspect past reviews. The store is a
+  dedicated subsystem ([`internal/review`](dashboard)), not a projection
+  over the audit log — a completed review is a first-class, retrievable
+  record.
 - **`/api/manifest` exposes the schema.** It returns the
   [schema manifest](schema-manifest) verbatim — entities, fields (with
   their PII categories), and relationships — the one input that drives the

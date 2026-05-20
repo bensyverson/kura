@@ -22,6 +22,7 @@ import (
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/llm"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // defaultShutdownTimeout bounds how long Run waits for in-flight requests
@@ -36,7 +37,7 @@ const defaultTokenTTL = 12 * time.Hour
 // collaborator is nil. A server that cannot resolve a token, record an
 // audit event, run a request through the core gate, read a record, or
 // manage the authorized-user list must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, an audit store, and a jobs manager")
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, an audit store, a jobs manager, and a review store")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -90,6 +91,9 @@ type Config struct {
 	// ResetOrphans on startup so a previous-process crash recovers
 	// exactly once. Required.
 	Jobs *jobs.Manager
+	// Reviews is the access-review store the /api/reviews endpoints persist
+	// to — the durable record of each periodic attestation. Required.
+	Reviews review.Store
 	// LLM is the core LLM gateway the /api/llm endpoint brokers calls
 	// through. Unlike the other collaborators it is optional: the gateway
 	// fails closed at construction for a provider whose DPA is not on
@@ -134,7 +138,7 @@ type Server struct {
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
 		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil ||
-		cfg.Audit == nil || cfg.Jobs == nil {
+		cfg.Audit == nil || cfg.Jobs == nil || cfg.Reviews == nil {
 		return nil, ErrMissingDependency
 	}
 	if cfg.Logger == nil {
@@ -156,6 +160,7 @@ func New(cfg Config) (*Server, error) {
 	s.registerAdminRoutes()
 	s.registerOverviewRoute()
 	s.registerManifestRoute()
+	s.registerReviewRoutes()
 	s.registerAuditRoutes()
 	s.registerJobsRoutes()
 	s.registerLLMRoute()

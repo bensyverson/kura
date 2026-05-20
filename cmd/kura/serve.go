@@ -18,6 +18,7 @@ import (
 	"github.com/bensyverson/kura/internal/llm"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
+	"github.com/bensyverson/kura/internal/review"
 	"github.com/bensyverson/kura/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -215,6 +216,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// produce long-running operations (backup/restore) will call
 		// Jobs.Register before Run.
 		Jobs: jobs.NewManager(jobs.NewMemStore()),
+		// MemStore is the v1 backing for access-review artifacts. The
+		// Postgres-backed review.Store is integration-tested in
+		// internal/review; until the dev-bringup wiring selects it, kura
+		// serve keeps reviews in memory like the other stores.
+		Reviews: review.NewMemStore(),
 		Trust: identity.TenantTrust{
 			FirmTenant:    firmDomain,
 			ClientTenants: splitList(getenv("KURA_CLIENT_DOMAINS")),

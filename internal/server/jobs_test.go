@@ -18,6 +18,7 @@ import (
 	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // jobsTestHarness wires an in-process server whose gate's role resolver
@@ -66,6 +67,7 @@ func newJobsTestHarness(t *testing.T) *jobsTestHarness {
 			IdP:      identity.NewFakeDirectory(),
 			Audit:    store,
 			Jobs:     mgr,
+			Reviews:  review.NewMemStore(),
 		},
 		auth: auth,
 		mgr:  mgr,

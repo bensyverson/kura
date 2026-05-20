@@ -16,6 +16,7 @@ import (
 	"github.com/bensyverson/kura/internal/jobs"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // testConfig returns a complete, wired Config for the given bind address,
@@ -54,6 +55,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		IdP:      identity.NewFakeDirectory(),
 		Audit:    store,
 		Jobs:     jobsMgr,
+		Reviews:  review.NewMemStore(),
 	}, auth
 }
 

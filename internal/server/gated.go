@@ -10,6 +10,7 @@ import (
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/jobs"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // gatedRoute is the interface every route mounted under /api/ must
@@ -184,8 +185,14 @@ func writeGateError(w http.ResponseWriter, err error) {
 	case errors.Is(err, gate.ErrUnknownEntity),
 		errors.Is(err, data.ErrNotFound),
 		errors.Is(err, data.ErrUserNotFound),
-		errors.Is(err, jobs.ErrJobNotFound):
+		errors.Is(err, jobs.ErrJobNotFound),
+		errors.Is(err, review.ErrNotFound),
+		errors.Is(err, review.ErrSubjectNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
+	case errors.Is(err, review.ErrClosed):
+		http.Error(w, "conflict: the review is completed", http.StatusConflict)
+	case errors.Is(err, review.ErrInvalidDecision), errors.Is(err, review.ErrEmptyReview):
+		http.Error(w, "bad request", http.StatusBadRequest)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
 	}
