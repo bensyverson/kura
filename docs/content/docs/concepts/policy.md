@@ -67,6 +67,25 @@ actions**.
 The IR is **permit-only**: deny-by-default, no `forbid` rules. That is what keeps it
 the safe subset. Free-form Cedar — including `forbid` — stays a repo/PR activity.
 
+### The IR is the policy ceiling (decided 2026-05-19)
+
+Cedar is far more expressive than what Kura enforces (`forbid`, `when`/`unless`
+ABAC conditions, entity hierarchies, request context). **The IR is the hard ceiling
+for Kura's enforced authorization policy; that extra expressiveness is a non-goal.**
+The only evaluator path is `cedar.NewEvaluator(cedar.DefaultPolicy(m))` — there is no
+loader for raw Cedar text, so free-form Cedar is neither enforced nor representable,
+by design.
+
+This is a deliberate trade of expressiveness for **auditability and completeness**.
+Kura's audience is the 1–3 non-expert admins per client who must be able to read the
+*whole* policy: because the IR is the ceiling, the dashboard's structured grid is the
+**complete, authoritative picture** of what the deployment enforces — never a partial
+view sitting above hidden free-form rules. Admitting free-form Cedar would break that
+property, which is the policy viewer's reason for existing. If this is ever revisited,
+the agreed rendering is recorded on job `60Ljz`: render the Cedar *scope* structurally
+and show `when`/`unless` *conditions* verbatim (never an auto-generated paraphrase of a
+security rule).
+
 ### Compilation and evaluation
 
 The IR **compiles to Cedar policy text**, and the compiler guarantees validity by

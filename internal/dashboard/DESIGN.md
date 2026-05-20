@@ -268,6 +268,10 @@ client-side routing, no client-side data fetching, no framework.
 - **Do** lead each panel with one uppercase eyebrow and one `<h1>`.
 - **Do** set IDs, counts, and timestamps in mono with tabular figures.
 - **Do** design both plaster and sumi themes for every new surface.
+- **Do** treat the policy viewer's grid as the *complete* policy. The
+  structured IR is the enforced ceiling (decided 2026-05-19 — Kura admits no
+  free-form Cedar; see the Cedar policy concept doc), so the grid is the
+  whole, authoritative picture, never a partial view above hidden rules.
 - **Don't** add a new color, font, or radius without first adding it here.
 - **Don't** use more than two font weights on a screen.
 - **Don't** mix sharp and rounded corners in the same view.
