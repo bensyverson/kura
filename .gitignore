@@ -16,3 +16,6 @@ vendor/
 
 # local files
 local/
+
+# dev-instance state (scripts/dev-instance.sh)
+/.dev-instance/

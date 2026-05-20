@@ -239,6 +239,7 @@ deployment:
 | `KURA_DB_TENANT_ID` | The tenant id the Postgres stores scope their row-level security to. Required when `KURA_DATABASE_URL` is set. |
 | `KURA_RECORD_ENCRYPTION_KEY` | The app-managed key the record store decrypts encrypted fields with. Required when `KURA_DATABASE_URL` is set. |
 | `KURA_MANIFEST_PATH` | Path to the [schema manifest](schema-manifest) file. When set, the gate enforces against it and the API grows a data route per entity; an invalid manifest fails startup loudly. When unset, the gate runs on an empty manifest and generates no data routes. |
+| `KURA_DIRECTORY` | Set to `none` to disable IdP-mismatch detection: the [Directory client](identity) becomes a no-op that reports every account active and never dials out, so `GET /api/users/mismatches` and the overview's needs-attention panel return no mismatches. For a deployment without directory-API access, and for the offline [local dev instance](../getting-started/local-development). When unset, the directory is the one paired with `KURA_IDP`. |
 
 The production source of the database connection, secrets, and manifest is
 the deployment repo and its secrets backend; the environment variables are

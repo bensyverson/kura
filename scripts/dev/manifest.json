@@ -1,0 +1,32 @@
+{
+  "version": "1",
+  "description": "A generic dev/demo schema for the local bring-up. Not a real client schema — it exists so scripts/dev-instance.sh can stand up a Kura with data that exercises masking and encryption end to end.",
+  "entities": [
+    {
+      "name": "customer",
+      "description": "A person whose data the client holds.",
+      "fields": [
+        { "name": "full_name", "type": "string", "description": "Customer's name.", "pii": "private_person" },
+        { "name": "email", "type": "string", "description": "Primary contact email.", "pii": "private_email" },
+        { "name": "phone", "type": "string", "description": "Contact phone number.", "pii": "private_phone" },
+        { "name": "ssn", "type": "string", "description": "High-sensitivity: encrypted at rest, masked for non-admins.", "pii": "account_number" },
+        { "name": "notes", "type": "text", "description": "Free-text case notes; PII-scanned and encrypted at ingestion." }
+      ],
+      "relationships": [
+        { "name": "orders", "kind": "many", "target": "order", "description": "Orders placed by this customer." }
+      ]
+    },
+    {
+      "name": "order",
+      "description": "A single purchase. Carries no PII — included so the dev instance has more than one route.",
+      "fields": [
+        { "name": "placed_at", "type": "timestamp", "description": "When the order was placed." },
+        { "name": "total_cents", "type": "integer", "description": "Order total, in cents." },
+        { "name": "status", "type": "string", "description": "Fulfillment status." }
+      ],
+      "relationships": [
+        { "name": "customer", "kind": "one", "target": "customer", "description": "The customer who placed this order." }
+      ]
+    }
+  ]
+}
