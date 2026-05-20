@@ -196,11 +196,13 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	auditStore := audit.NewMemStore()
 	recorder := audit.NewRecorder(auditStore)
 
-	// records and users come from buildStores: Postgres-backed when
-	// KURA_DATABASE_URL is configured, in-memory otherwise. The same user
-	// store both resolves roles for the gate and is the admin endpoints'
-	// management surface, so enforcement and management never drift.
-	records, users, err := buildStores(getenv)
+	// records, writer, and users come from buildStores: Postgres-backed
+	// when KURA_DATABASE_URL is configured, in-memory otherwise. records and
+	// writer are the same store under its read and write interfaces. The
+	// same user store both resolves roles for the gate and is the admin
+	// endpoints' management surface, so enforcement and management never
+	// drift.
+	records, writer, users, err := buildStores(getenv)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -227,10 +229,12 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// endpoint then answers 503. A failed DPA check disables the LLM
 		// endpoint; it does not stop the server.
 		LLM: buildLLMGateway(getenv),
-		// Records and Users are selected by buildStores from the
+		// Records, Writer, and Users are selected by buildStores from the
 		// environment: the Postgres-backed stores when KURA_DATABASE_URL is
-		// set, the in-memory stores otherwise.
+		// set, the in-memory stores otherwise. Records and Writer are the
+		// same store under its read and write interfaces.
 		Records: records,
+		Writer:  writer,
 		Users:   users,
 		// IdP is the vendor Directory paired with the sign-in IdP:
 		// googleDirectory for Google, microsoftDirectory for Entra,
@@ -267,10 +271,11 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 // server with no DB configured behaves exactly as before. Both stores
 // share one pool: the user store also resolves roles for the gate, so a
 // single connection serves enforcement and management alike.
-func buildStores(getenv func(string) string) (data.RecordStore, data.UserStore, error) {
+func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWriter, data.UserStore, error) {
 	dsn := getenv("KURA_DATABASE_URL")
 	if dsn == "" {
-		return data.NewMemStore(), data.NewMemUserStore(), nil
+		mem := data.NewMemStore()
+		return mem, mem, data.NewMemUserStore(), nil
 	}
 
 	required := func(key string) (string, error) {
@@ -281,11 +286,11 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.UserStore, 
 	}
 	tenantID, err := required("KURA_DB_TENANT_ID")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	encKey, err := required("KURA_RECORD_ENCRYPTION_KEY")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	// Open validates the DSN — refusing any non-TLS connection — before the
@@ -293,26 +298,26 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.UserStore, 
 	// any unreachable-host failure) happens during Migrate below.
 	pool, err := db.Open(dsn)
 	if err != nil {
-		return nil, nil, fmt.Errorf("serve: opening database: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: opening database: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
 	defer cancel()
 	if err := db.Migrate(ctx, pool); err != nil {
 		pool.Close()
-		return nil, nil, fmt.Errorf("serve: running migrations: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: running migrations: %w", err)
 	}
 
-	records, err := data.NewPostgresStore(pool, tenantID, encKey)
+	pg, err := data.NewPostgresStore(pool, tenantID, encKey)
 	if err != nil {
 		pool.Close()
-		return nil, nil, fmt.Errorf("serve: building record store: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: building record store: %w", err)
 	}
 	users, err := data.NewPostgresUserStore(pool, tenantID)
 	if err != nil {
 		pool.Close()
-		return nil, nil, fmt.Errorf("serve: building user store: %w", err)
+		return nil, nil, nil, fmt.Errorf("serve: building user store: %w", err)
 	}
-	return records, users, nil
+	return pg, pg, users, nil
 }
 
 // buildManifest loads the schema manifest the gate enforces against and

@@ -122,6 +122,53 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+// ingestBinding translates an authenticated request into a gate
+// IngestRequest and the Writer that persists the record once the gate has
+// authorized, validated, scanned, and classified it. Like the read
+// bindings it never touches the ResponseWriter: it describes the request
+// and supplies the write, and the handler renders the outcome.
+type ingestBinding func(r *http.Request, p identity.Principal) (gate.IngestRequest, gate.Writer, error)
+
+// gatedIngestHandler serves a record-ingestion endpoint. It owns the call
+// to Gate.Ingest and the rendering of the new record's id; the
+// ingestBinding it wraps never touches the ResponseWriter.
+type gatedIngestHandler struct {
+	gate    *gate.Gate
+	binding ingestBinding
+}
+
+func (*gatedIngestHandler) gatedThroughCore() {}
+
+// idResponse is the body of a successful ingestion: the new record's id.
+type idResponse struct {
+	ID string `json:"id"`
+}
+
+// ServeHTTP runs the bound ingestion request through the gate and writes
+// the new record's id as JSON with 201 Created. The binding only describes
+// the IngestRequest and the Writer; the gate decides whether the write
+// runs and audits it.
+func (h *gatedIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, write, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	res, err := h.gate.Ingest(r.Context(), req, write)
+	if err != nil {
+		writeGateError(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(idResponse{ID: res.RecordID})
+}
+
 // adminBinding translates an authenticated request into a gate
 // AdminRequest and the operation to run under it once authorization
 // passes. Like the data bindings it never touches the ResponseWriter:
@@ -191,7 +238,9 @@ func writeGateError(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, review.ErrClosed):
 		http.Error(w, "conflict: the review is completed", http.StatusConflict)
-	case errors.Is(err, review.ErrInvalidDecision), errors.Is(err, review.ErrEmptyReview):
+	case errors.Is(err, gate.ErrUnknownField),
+		errors.Is(err, review.ErrInvalidDecision),
+		errors.Is(err, review.ErrEmptyReview):
 		http.Error(w, "bad request", http.StatusBadRequest)
 	default:
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -234,4 +283,14 @@ func (s *Server) registerAdmin(pattern string, binding adminBinding) {
 		s.apiRoutes = make(map[string]gatedRoute)
 	}
 	s.apiRoutes[pattern] = &adminHandler{gate: s.cfg.Gate, binding: binding}
+}
+
+// registerIngest mounts a record-ingestion route under /api/. Like the
+// other registrars it produces a gated handler — a *gatedIngestHandler —
+// so every write goes through Gate.Ingest by construction.
+func (s *Server) registerIngest(pattern string, binding ingestBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &gatedIngestHandler{gate: s.cfg.Gate, binding: binding}
 }

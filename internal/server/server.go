@@ -37,7 +37,7 @@ const defaultTokenTTL = 12 * time.Hour
 // collaborator is nil. A server that cannot resolve a token, record an
 // audit event, run a request through the core gate, read a record, or
 // manage the authorized-user list must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a user store, an IdP directory, an audit store, a jobs manager, and a review store")
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a record writer, a user store, an IdP directory, an audit store, a jobs manager, and a review store")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -71,6 +71,12 @@ type Config struct {
 	// The gate owns enforcement; Records just supplies the raw bytes.
 	// Required.
 	Records data.RecordStore
+	// Writer is the storage seam the ingestion route writes through — the
+	// write counterpart to Records. The gate owns enforcement (authorize,
+	// validate, scan, classify); Writer just persists what it decided. In a
+	// real deployment Records and Writer are the same store instance.
+	// Required.
+	Writer data.RecordWriter
 	// Users is the authorized-user list and role assignments — the
 	// surface the admin endpoints manage. It is the same store that
 	// resolves roles for the Gate, so management and enforcement never
@@ -137,7 +143,7 @@ type Server struct {
 // that.
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
-		cfg.Gate == nil || cfg.Records == nil || cfg.Users == nil || cfg.IdP == nil ||
+		cfg.Gate == nil || cfg.Records == nil || cfg.Writer == nil || cfg.Users == nil || cfg.IdP == nil ||
 		cfg.Audit == nil || cfg.Jobs == nil || cfg.Reviews == nil {
 		return nil, ErrMissingDependency
 	}

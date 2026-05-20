@@ -60,10 +60,17 @@ manifest declares, the server registers one route pair:
 | --- | --- | --- |
 | `GET /api/{entity}/{id}` | get one record | `Gate.Access` (the `read` action) |
 | `GET /api/{entity}` | list a page of records | `Gate.List` (the `list` action) |
+| `POST /api/{entity}` | ingest one record | `Gate.Ingest` (the `create` action) |
 
 A client adds an entity to its manifest and the API grows the matching
 routes with no per-entity code. With an empty manifest no data routes
 exist at all — exactly right for a server that has no schema yet.
+
+- **The POST route is the write half**, covered in full by
+  [Record ingestion](ingestion): it authorizes the `create`, validates the
+  body against the manifest, scans for PII, encrypts high-sensitivity and
+  free-text fields, and persists — the symmetric counterpart to the masked
+  read. `kura ingest` is the bulk-import CLI over it.
 
 - **Every response is masked** by the gate, per the requesting
   principal's policy. The server never sees unmasked data: the binding

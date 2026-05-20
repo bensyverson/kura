@@ -63,6 +63,7 @@ func newJobsTestHarness(t *testing.T) *jobsTestHarness {
 			TokenTTL: time.Hour,
 			Gate:     g,
 			Records:  data.NewMemStore(),
+			Writer:   data.NewMemStore(),
 			Users:    users,
 			IdP:      identity.NewFakeDirectory(),
 			Audit:    store,

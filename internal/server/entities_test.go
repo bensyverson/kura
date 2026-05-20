@@ -66,6 +66,7 @@ func entitiesServer(t *testing.T) (srv *Server, adminTok, userTok string) {
 	cfg.Auth = auth
 	cfg.Gate = g
 	cfg.Records = store
+	cfg.Writer = store
 	srv, err = New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)

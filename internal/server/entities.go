@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -22,7 +23,57 @@ func (s *Server) registerEntityRoutes() {
 		entity := e.Name
 		s.registerData("GET /api/"+entity+"/{id}", getBinding(entity, s.cfg.Records))
 		s.registerListData("GET /api/"+entity, listBindingFor(entity, s.cfg.Records))
+		s.registerIngest("POST /api/"+entity, ingestBindingFor(entity, s.cfg.Writer))
 	}
+}
+
+// ingestBindingFor builds the binding for an entity's ingestion route: it
+// decodes the request body into a field map and names the gate
+// IngestRequest, and supplies a Writer that persists what the gate
+// classified by mapping the gate's WriteRecord onto the store's
+// RecordInput. The gate authorizes, validates, scans, and classifies
+// before the Writer ever runs.
+func ingestBindingFor(entity string, writer data.RecordWriter) ingestBinding {
+	return func(r *http.Request, _ identity.Principal) (gate.IngestRequest, gate.Writer, error) {
+		var fields map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+			return gate.IngestRequest{}, nil, err
+		}
+		req := gate.IngestRequest{
+			Token:  bearerToken(r),
+			Entity: entity,
+			Fields: fields,
+		}
+		write := func(ctx context.Context, rec gate.WriteRecord) (string, error) {
+			return writer.Insert(ctx, toRecordInput(entity, rec))
+		}
+		return req, write, nil
+	}
+}
+
+// toRecordInput maps the gate's decided WriteRecord onto the storage
+// layer's RecordInput. It is the seam that keeps the gate import-clean of
+// the data package: the gate decides in its own types, the adapter
+// translates to the store's.
+func toRecordInput(entity string, rec gate.WriteRecord) data.RecordInput {
+	in := data.RecordInput{
+		Entity: entity,
+		Fields: make([]data.FieldInput, len(rec.Fields)),
+		Spans:  make([]data.SpanInput, len(rec.Spans)),
+	}
+	for i, f := range rec.Fields {
+		in.Fields[i] = data.FieldInput{Name: f.Name, Type: f.Type, Value: f.Value, Encrypted: f.Encrypted}
+	}
+	for i, sp := range rec.Spans {
+		in.Spans[i] = data.SpanInput{
+			Field:      sp.Field,
+			Category:   string(sp.Category),
+			Offset:     sp.Offset,
+			Length:     sp.Length,
+			Confidence: sp.Confidence,
+		}
+	}
+	return in
 }
 
 // getBinding builds the binding for an entity's single-record route: it

@@ -41,6 +41,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		t.Fatalf("gate.New: %v", err)
 	}
 	jobsMgr := jobs.NewManager(jobs.NewMemStore()).WithIdleBackoff(5 * time.Millisecond)
+	records := data.NewMemStore()
 	return Config{
 		Addr:     addr,
 		Logger:   discardLogger(),
@@ -50,7 +51,8 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Trust:    testTrust(),
 		TokenTTL: time.Hour,
 		Gate:     g,
-		Records:  data.NewMemStore(),
+		Records:  records,
+		Writer:   records,
 		Users:    data.NewMemUserStore(),
 		IdP:      identity.NewFakeDirectory(),
 		Audit:    store,

@@ -9,6 +9,7 @@ The mental model behind Kura: the core enforcement library and the thin adapters
   {{< card link="schema-manifest" title="Schema manifest" subtitle="The keystone — the per-client file that drives every data surface." >}}
   {{< card link="identity" title="Identity & principals" subtitle="The consultant authentication model and the Cedar principal schema." >}}
   {{< card link="pii" title="PII detection" subtitle="The self-hosted detector and the ingestion / access-time call sites." >}}
+  {{< card link="ingestion" title="Record ingestion" subtitle="The unified, manifest-driven write path — validate, scan, encrypt, audit — and its CLI/HTTP surfaces." >}}
   {{< card link="audit" title="Audit log" subtitle="The append-only record of who did what — and why the data never lands in it." >}}
   {{< card link="database" title="Database layer" subtitle="The Postgres schema, migrations, extensions, per-component roles, RLS, and encryption at rest." >}}
   {{< card link="secrets" title="Secrets" subtitle="The runtime-injection model and the Doppler secrets-backend decision." >}}
