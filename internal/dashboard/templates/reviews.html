@@ -1,0 +1,41 @@
+{{define "content"}}
+{{with .Reviews}}
+{{if .Error}}<div class="banner banner-error" role="alert">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="banner banner-ok" role="status">{{.Notice}}</div>{{end}}
+
+<section class="panel">
+  <span class="eyebrow">Access control</span>
+  <h1>Access review</h1>
+  <p class="lede">Periodically attest that the right people hold the right access. Starting a review snapshots the current authorized list; you then approve or flag each person for removal, and complete the review to archive it as an auditable record.</p>
+
+  <form class="start-review" method="post" action="/reviews">
+    <button class="btn btn-primary" type="submit">Start a new review</button>
+  </form>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">History</span>
+  <h2>Past reviews</h2>
+  {{if .Reviews}}
+  <table class="table">
+    <thead>
+      <tr><th>Started</th><th>By</th><th>Status</th><th class="num">Progress</th><th></th></tr>
+    </thead>
+    <tbody>
+      {{range .Reviews}}
+      <tr>
+        <td class="mono">{{.StartedAt}}</td>
+        <td class="mono">{{.StartedBy}}</td>
+        <td>{{if .Completed}}<span class="badge badge-status-operational">completed</span>{{else}}<span class="badge">open</span>{{end}}</td>
+        <td class="num">{{if .Pending}}{{.Pending}} of {{.Total}} pending{{else}}all {{.Total}} decided{{end}}</td>
+        <td><a href="{{.Href}}">{{if .Completed}}View artifact{{else}}Continue{{end}} &rarr;</a></td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <p class="muted">No reviews yet. Start one above to attest the current access list.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}

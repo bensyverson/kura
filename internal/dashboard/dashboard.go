@@ -176,7 +176,15 @@ func (s *Server) Handler() http.Handler {
 	// HTTP API, and MCP surfaces plus the token-issuance flow.
 	mux.HandleFunc("GET /help", s.handleHelp)
 
-	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true, "/data": true, "/help": true}
+	// The Access review page is built: list, start, per-subject decisions,
+	// and completion (mutations are POST-redirect-GET, same-origin guarded).
+	mux.HandleFunc("GET /reviews", s.handleReviews)
+	mux.HandleFunc("POST /reviews", s.handleStartReview)
+	mux.HandleFunc("GET /reviews/{id}", s.handleReviewDetail)
+	mux.HandleFunc("POST /reviews/{id}/decisions", s.handleReviewDecide)
+	mux.HandleFunc("POST /reviews/{id}/complete", s.handleReviewComplete)
+
+	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true, "/data": true, "/help": true, "/reviews": true}
 	for _, link := range navLinks {
 		if built[link.Path] {
 			continue
@@ -355,6 +363,8 @@ type pageData struct {
 	DataList   *dataListView
 	DataRecord *dataRecordView
 	Help       *helpView
+	Reviews    *reviewsView
+	Review     *reviewDetailView
 	Body       any
 }
 

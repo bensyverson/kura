@@ -14,6 +14,7 @@ import (
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/manifest"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // ErrForbidden is the remote refusing a request the caller authenticated
@@ -289,6 +290,49 @@ func (c *apiClient) record(ctx context.Context, entity, id string) (map[string]s
 	return fields, nil
 }
 
+// startReview starts a new access review on the remote (POST /api/reviews),
+// which snapshots the current authorized list, and returns the created
+// review so the caller can redirect to its detail page.
+func (c *apiClient) startReview(ctx context.Context) (review.Review, error) {
+	var r review.Review
+	if err := c.postJSON(ctx, "/api/reviews", nil, &r); err != nil {
+		return review.Review{}, err
+	}
+	return r, nil
+}
+
+// reviews reads every access review from GET /api/reviews, newest-first.
+func (c *apiClient) reviews(ctx context.Context) ([]review.Review, error) {
+	var body struct {
+		Reviews []review.Review `json:"reviews"`
+	}
+	if err := c.getJSON(ctx, "/api/reviews", &body); err != nil {
+		return nil, err
+	}
+	return body.Reviews, nil
+}
+
+// reviewByID reads one access review (GET /api/reviews/{id}).
+func (c *apiClient) reviewByID(ctx context.Context, id string) (review.Review, error) {
+	var r review.Review
+	if err := c.getJSON(ctx, "/api/reviews/"+url.PathEscape(id), &r); err != nil {
+		return review.Review{}, err
+	}
+	return r, nil
+}
+
+// decideReview records an approve/remove decision for one subject
+// (POST /api/reviews/{id}/decisions).
+func (c *apiClient) decideReview(ctx context.Context, id, email, decision, note string) error {
+	return c.do(ctx, http.MethodPost, "/api/reviews/"+url.PathEscape(id)+"/decisions",
+		map[string]string{"email": email, "decision": decision, "note": note})
+}
+
+// completeReview archives an access review (POST /api/reviews/{id}/complete).
+func (c *apiClient) completeReview(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, "/api/reviews/"+url.PathEscape(id)+"/complete", nil)
+}
+
 // mismatches reads the IdP mismatch list from GET /api/users/mismatches.
 func (c *apiClient) mismatches(ctx context.Context) ([]mismatchRow, error) {
 	var body struct {
@@ -402,6 +446,58 @@ func (c *apiClient) getJSON(ctx context.Context, path string, out any) error {
 
 	switch {
 	case resp.StatusCode == http.StatusOK:
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			return fmt.Errorf("dashboard: decoding remote response: %w", err)
+		}
+		return nil
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return ErrNotAuthenticated
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrRemoteNotFound
+	default:
+		return fmt.Errorf("dashboard: remote API returned status %d", resp.StatusCode)
+	}
+}
+
+// postJSON performs an authenticated POST against the remote API, marshaling
+// body as JSON when non-nil, and decodes the JSON response into out. It maps
+// remote statuses the same way getJSON does: 401/403 to ErrNotAuthenticated,
+// 404 to ErrRemoteNotFound. It is the write-with-a-response-body sibling of
+// do (which discards the body) — used where the dashboard needs the created
+// resource back, like the id of a freshly started review.
+func (c *apiClient) postJSON(ctx context.Context, path string, body, out any) error {
+	token, err := c.tokens.Token()
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrNotAuthenticated, err)
+	}
+	var reader *bytes.Reader
+	if body != nil {
+		buf, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("dashboard: encoding request body: %w", err)
+		}
+		reader = bytes.NewReader(buf)
+	} else {
+		reader = bytes.NewReader(nil)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+path, reader)
+	if err != nil {
+		return fmt.Errorf("dashboard: building request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("dashboard: calling remote API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			return fmt.Errorf("dashboard: decoding remote response: %w", err)
 		}

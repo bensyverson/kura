@@ -1,0 +1,65 @@
+{{define "content"}}
+{{with .Review}}
+{{if .Error}}<div class="banner banner-error" role="alert">{{.Error}}</div>{{end}}
+{{if .Notice}}<div class="banner banner-ok" role="status">{{.Notice}}</div>{{end}}
+
+<section class="panel">
+  <span class="eyebrow"><a href="/reviews">Access review</a> · {{if .Open}}In progress{{else}}Artifact{{end}}</span>
+  <h1>Review of {{.StartedAt}}</h1>
+  <dl class="facts">
+    <dt>Status</dt><dd>{{if .Open}}<span class="badge">open</span>{{else}}<span class="badge badge-status-operational">completed</span>{{end}}</dd>
+    <dt>Started by</dt><dd class="mono">{{.StartedBy}}</dd>
+    <dt>Started</dt><dd class="mono">{{.StartedAt}}</dd>
+    {{if .CompletedAt}}<dt>Completed</dt><dd class="mono">{{.CompletedAt}}</dd>{{end}}
+  </dl>
+
+  {{if .Open}}
+  <p class="muted">Approve each person whose access is correct, or flag for removal anyone whose access should be revoked. Flagging records the decision in this artifact; revoke their access on <a href="/users">Users &amp; roles</a>. Complete the review when every person is decided.</p>
+  {{else}}
+  <p class="muted">This review is complete and archived. It is a read-only record of what was attested.</p>
+  {{end}}
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Subjects</span>
+  <h2>{{if .Open}}{{.Pending}} of {{len .Items}} still to decide{{else}}Attested access{{end}}</h2>
+  <table class="table">
+    <thead>
+      <tr><th>Person</th><th>Roles at review</th><th>Decision</th>{{if .Open}}<th>Action</th>{{end}}</tr>
+    </thead>
+    <tbody>
+      {{$open := .Open}}
+      {{$id := .ID}}
+      {{range .Items}}
+      <tr>
+        <td class="mono">{{.Email}}</td>
+        <td>{{if .Roles}}{{range $i, $r := .Roles}}{{if $i}} {{end}}<span class="badge badge-{{$r}}">{{$r}}</span>{{end}}{{else}}<span class="muted">no roles</span>{{end}}</td>
+        <td>
+          {{if eq .Decision "approved"}}<span class="badge badge-status-operational">approved</span>
+          {{else if eq .Decision "removed"}}<span class="badge badge-alert">flagged for removal</span>
+          {{else}}<span class="badge">pending</span>{{end}}
+          {{if .Note}}<span class="muted review-note">— {{.Note}}</span>{{end}}
+        </td>
+        {{if $open}}
+        <td>
+          <form class="decide" method="post" action="/reviews/{{$id}}/decisions">
+            <input type="hidden" name="email" value="{{.Email}}">
+            <button class="btn" type="submit" name="decision" value="approved">Approve</button>
+            <button class="btn btn-danger" type="submit" name="decision" value="removed">Remove</button>
+          </form>
+        </td>
+        {{end}}
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  {{if .Open}}
+  <form class="complete-review" method="post" action="/reviews/{{.ID}}/complete">
+    <button class="btn btn-primary" type="submit">Complete review</button>
+    {{if .Pending}}<span class="muted">{{.Pending}} subject{{if ne .Pending 1}}s{{end}} still pending — you can complete now and they remain recorded as pending.</span>{{end}}
+  </form>
+  {{end}}
+</section>
+{{end}}
+{{end}}

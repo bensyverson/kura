@@ -15,6 +15,7 @@ import (
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/manifest"
+	"github.com/bensyverson/kura/internal/review"
 )
 
 // staticToken is a TokenSource that returns a fixed token, or an error
@@ -73,6 +74,11 @@ type fakeRemote struct {
 	records       map[string][]recordWire
 	lastListQuery url.Values
 	manifestHits  int
+
+	// reviews is a real in-memory review store the fake's /api/reviews
+	// handlers delegate to, so the access-review page tests run against
+	// realistic store behavior.
+	reviews *review.MemStore
 }
 
 // recordWire is one record as the remote serves it — an id and a map of
@@ -131,6 +137,7 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 			},
 			NeedsAttention: overviewAttention{IdPMismatches: nil, Anomalies: []string{}},
 		},
+		reviews: review.NewMemStore(),
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
@@ -265,6 +272,60 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		_ = json.NewEncoder(w).Encode(fields)
 	})
 
+	mux.HandleFunc("POST /api/reviews", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		subjects := make([]review.Item, len(fr.users))
+		for i, u := range fr.users {
+			subjects[i] = review.Item{Email: u.Email, RolesAtReview: u.Roles}
+		}
+		fr.mu.Unlock()
+		rv, err := fr.reviews.Create(r.Context(), "boss@client.example", subjects)
+		if err != nil {
+			writeReviewErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rv)
+	})
+	mux.HandleFunc("GET /api/reviews", func(w http.ResponseWriter, r *http.Request) {
+		list, _ := fr.reviews.List(r.Context())
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Reviews []review.Review `json:"reviews"`
+		}{Reviews: list})
+	})
+	mux.HandleFunc("GET /api/reviews/{id}", func(w http.ResponseWriter, r *http.Request) {
+		rv, err := fr.reviews.Get(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeReviewErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rv)
+	})
+	mux.HandleFunc("POST /api/reviews/{id}/decisions", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Email    string `json:"email"`
+			Decision string `json:"decision"`
+			Note     string `json:"note"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if err := fr.reviews.Decide(r.Context(), r.PathValue("id"), body.Email, review.Decision(body.Decision), body.Note); err != nil {
+			writeReviewErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+	mux.HandleFunc("POST /api/reviews/{id}/complete", func(w http.ResponseWriter, r *http.Request) {
+		rv, err := fr.reviews.Complete(r.Context(), r.PathValue("id"))
+		if err != nil {
+			writeReviewErr(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(rv)
+	})
+
 	record := func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		fr.mu.Lock()
@@ -306,6 +367,22 @@ type mismatchesResponse struct {
 // auditQueryResponse mirrors the remote API's GET /api/audit envelope.
 type auditQueryResponse struct {
 	Events []auditEventWire `json:"events"`
+}
+
+// writeReviewErr maps a review store error to the HTTP status the real
+// server's writeGateError produces, so the fake's review endpoints behave
+// like the remote.
+func writeReviewErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, review.ErrNotFound), errors.Is(err, review.ErrSubjectNotFound):
+		w.WriteHeader(http.StatusNotFound)
+	case errors.Is(err, review.ErrClosed):
+		w.WriteHeader(http.StatusConflict)
+	case errors.Is(err, review.ErrInvalidDecision), errors.Is(err, review.ErrEmptyReview):
+		w.WriteHeader(http.StatusBadRequest)
+	default:
+		w.WriteHeader(http.StatusInternalServerError)
+	}
 }
 
 func newTestServer(t *testing.T, remote string, tokens TokenSource) *Server {

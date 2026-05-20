@@ -73,6 +73,31 @@ came from the dashboard itself: its `Origin` (or, failing that, `Referer`)
 must be loopback. A cross-site or origin-less POST is refused with `403`
 before it ever reaches the remote API.
 
+## The access-review page
+
+`/reviews` runs the periodic **access review** — the attestation that the
+right people still hold the right access — entirely in the local dashboard
+(a locked decision: no emailed remote link). It reads and writes through the
+dedicated review API ([`/api/reviews`](server)):
+
+- **`/reviews`** lists past reviews newest-first, each with its progress
+  (how many subjects remain undecided), and a button to **start** one.
+  Starting snapshots the current authorized list into a new open review.
+- **`/reviews/{id}`** is the review itself: every subject with the roles they
+  held *at snapshot time* and an **approve** / **remove** control. The
+  reviewer decides each person, then **completes** the review.
+
+A completed review is an **immutable, retrievable artifact** — a read-only
+record (no decision controls) of who attested what, and when. It is a
+first-class record in its own store, not a projection over the audit log.
+
+Flagging a person for removal records that decision in the artifact; it does
+**not** silently revoke their access. Remediation stays the deliberate
+mutation on [Users & roles](#the-users--roles-page), so the review attests
+and the admin acts — the artifact says what should change, and the change is
+made where every other access mutation is made. State-changing actions use
+the same POST-redirect-GET, same-origin-guarded path as the users page.
+
 ## The policy page (Cedar structured viewer)
 
 `/policy` is a **read-only** view of the authorization policy your

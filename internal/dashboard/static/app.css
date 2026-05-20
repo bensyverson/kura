@@ -703,6 +703,20 @@ h3 {
 .table-scroll { overflow-x: auto; margin-top: var(--space-4); }
 .table-scroll .table { margin-top: 0; }
 
+/* ── Access review ──────────────────────────────────────────────── */
+.start-review { margin-top: var(--space-5); }
+.decide { display: inline-flex; gap: var(--space-2); margin: 0; }
+.complete-review {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: var(--hairline) solid var(--border);
+}
+.review-note { font-size: 0.85rem; }
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 44rem) {
   .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }
