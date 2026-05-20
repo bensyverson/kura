@@ -220,15 +220,30 @@ The pieces *outside* the seam — `TenantTrust`, the token model, the
 audit log, the gate — never see which family signed the request; they
 see only the verified identity.
 
+## Startup configuration: stores and manifest
+
+`kura serve` reads its backings from the environment, so the same binary
+runs the credential-less dev/bare path and a real Postgres-backed
+deployment:
+
+| Variable | Effect |
+| --- | --- |
+| `KURA_DATABASE_URL` | When set (TLS required), records and the authorized-user list are read/written through the Postgres-backed `PostgresStore`/`PostgresUserStore`, and pending [migrations](database) run against the database at startup. When unset, both stay in the in-memory `MemStore`/`MemUserStore` — existing behavior. |
+| `KURA_DB_TENANT_ID` | The tenant id the Postgres stores scope their row-level security to. Required when `KURA_DATABASE_URL` is set. |
+| `KURA_RECORD_ENCRYPTION_KEY` | The app-managed key the record store decrypts encrypted fields with. Required when `KURA_DATABASE_URL` is set. |
+| `KURA_MANIFEST_PATH` | Path to the [schema manifest](schema-manifest) file. When set, the gate enforces against it and the API grows a data route per entity; an invalid manifest fails startup loudly. When unset, the gate runs on an empty manifest and generates no data routes. |
+
+The production source of the database connection, secrets, and manifest is
+the deployment repo and its secrets backend; the environment variables are
+the dev stand-in for that wiring.
+
 ## Caveat: the rest of `kura serve` is still mid-build
 
-The endpoints above are the v1 surface. A few collaborators are still
-v1 placeholders — the in-memory `MemStore` for records, the in-memory
-`MemUserStore` for the authorized-user list, the in-memory audit
-backing — that will land as their own build-plan tasks before any data
-schema is loaded. The IdP-mismatch endpoint is *real* on Google and
-Microsoft now; on generic OIDC it answers consistently empty (see
-[Identity](identity) for the why).
+The endpoints above are the v1 surface. The audit log still uses the
+in-memory backing — a v1 placeholder that will land as its own build-plan
+task. The IdP-mismatch endpoint is *real* on Google and Microsoft now; on
+generic OIDC it answers consistently empty (see [Identity](identity) for
+the why).
 
 ## Conventions
 

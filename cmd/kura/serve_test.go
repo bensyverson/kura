@@ -4,9 +4,41 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bensyverson/kura/internal/data"
+	"github.com/bensyverson/kura/internal/server"
 )
+
+// writeManifest writes content to a temp file and returns its path, for
+// tests that drive serveConfig's KURA_MANIFEST_PATH loading.
+func writeManifest(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("writing manifest: %v", err)
+	}
+	return path
+}
+
+// oneEntityManifest is a minimal valid manifest with a single entity, used
+// to prove serveConfig loads it and the server grows the matching routes.
+const oneEntityManifest = `{
+  "version": "1",
+  "entities": [
+    {
+      "name": "customer",
+      "description": "A person whose data the client holds.",
+      "fields": [
+        { "name": "id", "type": "string", "description": "Stable identifier." },
+        { "name": "full_name", "type": "string", "description": "Name.", "pii": "private_person" }
+      ]
+    }
+  ]
+}`
 
 // serveEnv is a complete set of the environment variables serveConfig
 // requires, for tests to start from and then perturb. It includes the
@@ -84,6 +116,148 @@ func TestServeConfigWiresAcceptableConfig(t *testing.T) {
 	}
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("serveConfig with a complete environment: %v", err)
+	}
+}
+
+// With no KURA_DATABASE_URL, serveConfig falls back to the in-memory
+// stores — the credential-less dev/bare path. Existing behavior is
+// unchanged: the record store and user store are MemStore/MemUserStore.
+func TestServeConfigDefaultsToInMemoryStores(t *testing.T) {
+	env := serveEnv(t)
+	delete(env, "KURA_DATABASE_URL")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	if _, ok := cfg.Records.(*data.MemStore); !ok {
+		t.Errorf("Records = %T, want *data.MemStore when no KURA_DATABASE_URL is set", cfg.Records)
+	}
+	if _, ok := cfg.Users.(*data.MemUserStore); !ok {
+		t.Errorf("Users = %T, want *data.MemUserStore when no KURA_DATABASE_URL is set", cfg.Users)
+	}
+}
+
+// With KURA_DATABASE_URL set, the tenant id is required: a Postgres store
+// cannot scope its row-level-security to a tenant it has not been given,
+// so startup must fail loudly rather than serve unscoped.
+func TestServeConfigDatabaseURLRequiresTenantID(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	delete(env, "KURA_DB_TENANT_ID")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_DB_TENANT_ID")
+	}
+	if !strings.Contains(err.Error(), "KURA_DB_TENANT_ID") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// With KURA_DATABASE_URL set, the record encryption key is required: the
+// Postgres store decrypts encrypted fields with it, so a deployment that
+// configures a database but no key must fail startup.
+func TestServeConfigDatabaseURLRequiresEncryptionKey(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	delete(env, "KURA_RECORD_ENCRYPTION_KEY")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_RECORD_ENCRYPTION_KEY")
+	}
+	if !strings.Contains(err.Error(), "KURA_RECORD_ENCRYPTION_KEY") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// A KURA_DATABASE_URL that would permit a non-TLS connection must be
+// rejected at startup — 03-for-agents.md requires TLS on every database
+// connection. The rejection happens before any connection is attempted.
+func TestServeConfigRejectsInsecureDatabaseURL(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=disable"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted a non-TLS KURA_DATABASE_URL")
+	}
+}
+
+// With no KURA_MANIFEST_PATH, the gate runs on an empty manifest — the
+// bare dev case. No entities means no data routes are generated, which is
+// valid: a server can come up before a deployment has authored a schema.
+func TestServeConfigEmptyManifestByDefault(t *testing.T) {
+	env := serveEnv(t)
+	delete(env, "KURA_MANIFEST_PATH")
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	if got := len(cfg.Gate.Manifest().Entities); got != 0 {
+		t.Errorf("Gate.Manifest().Entities = %d, want 0 with no KURA_MANIFEST_PATH", got)
+	}
+}
+
+// With KURA_MANIFEST_PATH set, serveConfig loads the manifest through the
+// Phase 1 parser, the gate carries its entities, and the server grows the
+// matching data routes — proof the overview/data-browser have something to
+// show.
+func TestServeConfigLoadsManifestFromPath(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_MANIFEST_PATH"] = writeManifest(t, oneEntityManifest)
+	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("serveConfig: %v", err)
+	}
+	ents := cfg.Gate.Manifest().Entities
+	if len(ents) != 1 || ents[0].Name != "customer" {
+		t.Fatalf("Gate.Manifest().Entities = %+v, want one 'customer' entity", ents)
+	}
+	// The route is a function of the manifest: with the entity loaded, the
+	// server must route /api/customer/{id}. An unauthenticated request is
+	// rejected (not 200), but a generated route is reached — never a 404,
+	// which is what an unloaded manifest would produce.
+	srv, err := server.New(cfg)
+	if err != nil {
+		t.Fatalf("server.New: %v", err)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/customer/some-id", nil))
+	if rec.Code == http.StatusNotFound {
+		t.Errorf("GET /api/customer/some-id returned 404 — the manifest entity's data route was not generated")
+	}
+}
+
+// An invalid manifest must fail startup loudly: the Cedar policy is built
+// from the manifest, so a manifest that does not parse or validate cannot
+// produce a safe policy, and the server must refuse to start rather than
+// serve an unintended one.
+func TestServeConfigRejectsInvalidManifest(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_MANIFEST_PATH"] = writeManifest(t, `{"version":"1","entities":[{"name":""}]}`)
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted an invalid manifest — startup must fail loudly")
+	}
+	if !strings.Contains(err.Error(), "manifest") {
+		t.Errorf("error %q does not mention the manifest", err)
+	}
+}
+
+// A KURA_MANIFEST_PATH that points at no file must fail startup: an
+// operator who misconfigures the path should see a loud error, not a
+// silent fall-through to an empty schema.
+func TestServeConfigRejectsMissingManifestFile(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_MANIFEST_PATH"] = filepath.Join(t.TempDir(), "does-not-exist.json")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted a KURA_MANIFEST_PATH pointing at no file")
+	}
+	if !strings.Contains(err.Error(), "manifest") {
+		t.Errorf("error %q does not mention the manifest", err)
 	}
 }
 

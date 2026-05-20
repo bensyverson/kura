@@ -12,6 +12,7 @@ import (
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/data"
+	"github.com/bensyverson/kura/internal/db"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/jobs"
@@ -27,6 +28,11 @@ import (
 // happen during serveConfig when KURA_IDP=oidc. An unreachable issuer
 // must fail the operator's startup quickly, not hang.
 const oidcDiscoveryTimeout = 15 * time.Second
+
+// dbStartupTimeout bounds the connect-and-migrate that happens during
+// serveConfig when KURA_DATABASE_URL is set. An unreachable database must
+// fail the operator's startup quickly, not hang.
+const dbStartupTimeout = 30 * time.Second
 
 // defaultServeAddr binds loopback only. Caddy terminates TLS in front of
 // the server and proxies to it on the same host (Phase 6), so the server
@@ -95,7 +101,25 @@ Configuration is read from the environment:
                              leaves the /api/llm endpoint unavailable (503)
   KURA_ANTHROPIC_DPA_ON_FILE set truthy to attest the controller's DPA is
                              on file for Anthropic; without it the startup
-                             DPA check fails and /api/llm refuses to serve`,
+                             DPA check fails and /api/llm refuses to serve
+  KURA_DATABASE_URL          Postgres connection DSN (TLS required). When
+                             set, the server reads/writes through the
+                             Postgres record and user stores and runs
+                             pending migrations at startup. When unset, the
+                             server keeps records and users in memory — the
+                             credential-less dev/bare path
+  KURA_DB_TENANT_ID          tenant id the Postgres stores scope their
+                             row-level security to (required when
+                             KURA_DATABASE_URL is set)
+  KURA_RECORD_ENCRYPTION_KEY app-managed key the Postgres record store
+                             decrypts encrypted fields with (required when
+                             KURA_DATABASE_URL is set)
+  KURA_MANIFEST_PATH         path to the schema manifest file. When set,
+                             the gate enforces against it and the API grows
+                             a data route per declared entity; an invalid
+                             manifest fails startup. When unset, the gate
+                             runs on an empty manifest and no data routes
+                             are generated — the bare dev case`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addr, err := cmd.Flags().GetString("addr")
 			if err != nil {
@@ -172,14 +196,21 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	auditStore := audit.NewMemStore()
 	recorder := audit.NewRecorder(auditStore)
 
-	// MemUserStore is the v1 backing for the authorized-user list. The
-	// Postgres-backed UserStore is its own build-plan task; until it
-	// lands the server keeps the list in memory. The same store both
-	// resolves roles for the gate and is the admin endpoints' management
-	// surface, so enforcement and management never drift.
-	users := data.NewMemUserStore()
+	// records and users come from buildStores: Postgres-backed when
+	// KURA_DATABASE_URL is configured, in-memory otherwise. The same user
+	// store both resolves roles for the gate and is the admin endpoints'
+	// management surface, so enforcement and management never drift.
+	records, users, err := buildStores(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
 
-	g, err := buildGate(auth, recorder, users, detectorURL)
+	m, err := buildManifest(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
+
+	g, err := buildGate(auth, recorder, users, detectorURL, m)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -196,12 +227,10 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// endpoint then answers 503. A failed DPA check disables the LLM
 		// endpoint; it does not stop the server.
 		LLM: buildLLMGateway(getenv),
-		// MemStore is the v1 record-store backing for kura serve. The
-		// Postgres-backed RecordStore over kura.records is its own
-		// build-plan task; until it lands the server reads from memory.
-		// With the empty startup manifest no data routes are generated,
-		// so nothing reads it yet anyway.
-		Records: data.NewMemStore(),
+		// Records and Users are selected by buildStores from the
+		// environment: the Postgres-backed stores when KURA_DATABASE_URL is
+		// set, the in-memory stores otherwise.
+		Records: records,
 		Users:   users,
 		// IdP is the vendor Directory paired with the sign-in IdP:
 		// googleDirectory for Google, microsoftDirectory for Entra,
@@ -229,16 +258,92 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	}, nil
 }
 
+// buildStores selects the record and user stores from the environment.
+// With KURA_DATABASE_URL set it opens the configured Postgres database,
+// runs any pending migrations against it, and returns the Postgres-backed
+// stores; the companion KURA_DB_TENANT_ID and KURA_RECORD_ENCRYPTION_KEY
+// are then required, and a non-TLS DSN is refused. With no database URL it
+// returns the in-memory stores — the credential-less dev/bare path — so a
+// server with no DB configured behaves exactly as before. Both stores
+// share one pool: the user store also resolves roles for the gate, so a
+// single connection serves enforcement and management alike.
+func buildStores(getenv func(string) string) (data.RecordStore, data.UserStore, error) {
+	dsn := getenv("KURA_DATABASE_URL")
+	if dsn == "" {
+		return data.NewMemStore(), data.NewMemUserStore(), nil
+	}
+
+	required := func(key string) (string, error) {
+		if v := getenv(key); v != "" {
+			return v, nil
+		}
+		return "", fmt.Errorf("serve: required environment variable %s is not set (required when KURA_DATABASE_URL is set)", key)
+	}
+	tenantID, err := required("KURA_DB_TENANT_ID")
+	if err != nil {
+		return nil, nil, err
+	}
+	encKey, err := required("KURA_RECORD_ENCRYPTION_KEY")
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Open validates the DSN — refusing any non-TLS connection — before the
+	// pool is created. The pool is lazy, so the first real connection (and
+	// any unreachable-host failure) happens during Migrate below.
+	pool, err := db.Open(dsn)
+	if err != nil {
+		return nil, nil, fmt.Errorf("serve: opening database: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
+	defer cancel()
+	if err := db.Migrate(ctx, pool); err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("serve: running migrations: %w", err)
+	}
+
+	records, err := data.NewPostgresStore(pool, tenantID, encKey)
+	if err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("serve: building record store: %w", err)
+	}
+	users, err := data.NewPostgresUserStore(pool, tenantID)
+	if err != nil {
+		pool.Close()
+		return nil, nil, fmt.Errorf("serve: building user store: %w", err)
+	}
+	return records, users, nil
+}
+
+// buildManifest loads the schema manifest the gate enforces against and
+// the server projects data routes from. KURA_MANIFEST_PATH points at the
+// manifest file in the deployment repo (dec-policy-apply: the production
+// source is that repo). When the variable is unset the gate runs on an
+// empty manifest — the bare dev case, valid because no entities simply
+// means no data routes. A configured-but-unloadable manifest (missing,
+// malformed, or invalid) is a loud startup failure: the Cedar policy is
+// built from the manifest, so an unusable manifest must not yield a
+// silently-empty policy.
+func buildManifest(getenv func(string) string) (*manifest.Manifest, error) {
+	path := getenv("KURA_MANIFEST_PATH")
+	if path == "" {
+		return &manifest.Manifest{Version: "1"}, nil
+	}
+	m, err := manifest.ParseFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("serve: loading manifest: %w", err)
+	}
+	return m, nil
+}
+
 // buildGate assembles the core enforcement gate the server delegates
-// every data read to. The manifest and Cedar policy are loaded from the
-// deployment repo at startup — a later build-plan task; until that wiring
-// lands the gate runs on an empty manifest, which is consistent with the
-// server having no data routes registered yet. The PII detector, the
+// every data read to. The Cedar policy is built from the loaded manifest m
+// (buildManifest), so the entities the manifest declares are exactly the
+// ones the gate authorizes and the server routes. The PII detector, the
 // authenticator, and the role-resolving user store are real, and the
 // recorder is shared with the server so authentication and access land
 // in one audit log.
-func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gate.RoleResolver, detectorURL string) (*gate.Gate, error) {
-	m := &manifest.Manifest{Version: "1"}
+func buildGate(auth *identity.Authenticator, recorder *audit.Recorder, roles gate.RoleResolver, detectorURL string, m *manifest.Manifest) (*gate.Gate, error) {
 	evaluator, err := cedar.NewEvaluator(cedar.DefaultPolicy(m))
 	if err != nil {
 		return nil, fmt.Errorf("serve: building authorization evaluator: %w", err)
