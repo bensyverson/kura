@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/manifest"
 )
 
 // ErrForbidden is the remote refusing a request the caller authenticated
@@ -231,6 +233,62 @@ func (c *apiClient) audit(ctx context.Context, f auditFilter) ([]auditEntry, err
 	return body.Events, nil
 }
 
+// manifest reads the schema manifest from GET /api/manifest — the
+// entities, fields (with their PII categories), and relationships the data
+// browser renders. The manifest's JSON tags are its wire contract (they
+// are the on-disk schema format), so the dashboard decodes the core type
+// directly, as it does for cedar.Policy.
+func (c *apiClient) manifest(ctx context.Context) (*manifest.Manifest, error) {
+	var m manifest.Manifest
+	if err := c.getJSON(ctx, "/api/manifest", &m); err != nil {
+		return nil, err
+	}
+	return &m, nil
+}
+
+// recordRow is one record from a list or single read: its id and its
+// masked fields, exactly as the remote returned them. The dashboard never
+// unmasks — masking happened at the gate before these bytes were sent.
+type recordRow struct {
+	ID     string            `json:"id"`
+	Fields map[string]string `json:"fields"`
+}
+
+// listRecords reads a masked, bounded page of an entity's records from
+// GET /api/{entity}. The gate masks every record to the caller's principal
+// before it returns.
+func (c *apiClient) listRecords(ctx context.Context, entity string, limit, offset int) ([]recordRow, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	if offset > 0 {
+		q.Set("offset", strconv.Itoa(offset))
+	}
+	path := "/api/" + url.PathEscape(entity)
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var body struct {
+		Records []recordRow `json:"records"`
+	}
+	if err := c.getJSON(ctx, path, &body); err != nil {
+		return nil, err
+	}
+	return body.Records, nil
+}
+
+// record reads one masked record from GET /api/{entity}/{id}. The response
+// body is the masked field map; the id comes from the path. A missing
+// record surfaces as ErrRemoteNotFound.
+func (c *apiClient) record(ctx context.Context, entity, id string) (map[string]string, error) {
+	var fields map[string]string
+	if err := c.getJSON(ctx, "/api/"+url.PathEscape(entity)+"/"+url.PathEscape(id), &fields); err != nil {
+		return nil, err
+	}
+	return fields, nil
+}
+
 // mismatches reads the IdP mismatch list from GET /api/users/mismatches.
 func (c *apiClient) mismatches(ctx context.Context) ([]mismatchRow, error) {
 	var body struct {
@@ -350,6 +408,8 @@ func (c *apiClient) getJSON(ctx context.Context, path string, out any) error {
 		return nil
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return ErrNotAuthenticated
+	case resp.StatusCode == http.StatusNotFound:
+		return ErrRemoteNotFound
 	default:
 		return fmt.Errorf("dashboard: remote API returned status %d", resp.StatusCode)
 	}

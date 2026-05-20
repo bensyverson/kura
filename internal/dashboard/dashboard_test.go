@@ -14,6 +14,7 @@ import (
 
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/identity"
+	"github.com/bensyverson/kura/internal/manifest"
 )
 
 // staticToken is a TokenSource that returns a fixed token, or an error
@@ -62,6 +63,23 @@ type fakeRemote struct {
 	auditEvents    []auditEventWire
 	auditHits      int
 	lastAuditQuery url.Values
+
+	// schema backs GET /api/manifest and records back the data routes
+	// (GET /api/{entity} and GET /api/{entity}/{id}). lastListQuery records
+	// the pagination the dashboard forwarded; the records are served as the
+	// remote already masked them, so a test can prove the browser renders
+	// masked output verbatim and never unmasks.
+	schema        manifest.Manifest
+	records       map[string][]recordWire
+	lastListQuery url.Values
+	manifestHits  int
+}
+
+// recordWire is one record as the remote serves it — an id and a map of
+// (already-masked) field values.
+type recordWire struct {
+	ID     string            `json:"id"`
+	Fields map[string]string `json:"fields"`
 }
 
 // auditEventWire mirrors the remote API's audit-event JSON shape; the fake
@@ -115,7 +133,7 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		},
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/whoami", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/whoami", func(w http.ResponseWriter, r *http.Request) {
 		fr.mu.Lock()
 		fr.hits++
 		fr.lastAuth = r.Header.Get("Authorization")
@@ -129,7 +147,7 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(fr.principal)
 	})
-	mux.HandleFunc("/api/overview", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /api/overview", func(w http.ResponseWriter, r *http.Request) {
 		fr.mu.Lock()
 		fr.overviewHits++
 		fr.overviewAuth = r.Header.Get("Authorization")
@@ -193,6 +211,58 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(out)
+	})
+
+	mux.HandleFunc("GET /api/manifest", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		fr.manifestHits++
+		status := fr.status
+		m := fr.schema
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(m)
+	})
+	mux.HandleFunc("GET /api/{entity}", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		fr.lastListQuery = r.URL.Query()
+		status := fr.status
+		recs := append([]recordWire(nil), fr.records[r.PathValue("entity")]...)
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Records []recordWire `json:"records"`
+			Limit   int          `json:"limit"`
+			Offset  int          `json:"offset"`
+		}{Records: recs, Limit: 50, Offset: 0})
+	})
+	mux.HandleFunc("GET /api/{entity}/{id}", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		status := fr.status
+		var fields map[string]string
+		for _, rec := range fr.records[r.PathValue("entity")] {
+			if rec.ID == r.PathValue("id") {
+				fields = rec.Fields
+			}
+		}
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		if fields == nil {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(fields)
 	})
 
 	record := func(w http.ResponseWriter, r *http.Request) {

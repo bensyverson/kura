@@ -93,6 +93,31 @@ structured *editor*: it reads the exact IR that editor will edit, so
 nothing here is throwaway. There is **no free-form editor** — authoring
 Cedar stays a reviewed pull request, outside the constrained IR.
 
+## The data browser
+
+`/data` is a generic, **schema-manifest-driven** browser over the records
+the store holds — a sanity-check tool, not a CRM. It reads the
+[schema manifest](server) (`GET /api/manifest`) and renders whatever
+entities, fields, and relationships it declares, with **no entity-specific
+code**: add an entity to the manifest and it appears here, columns and all.
+
+- **`/data`** lists every entity as a card — name, description, field and
+  relationship counts — linking into its records.
+- **`/data/{entity}`** is one entity's record list: a column per manifest
+  field, each row linked to its detail, paginated. An entity not in the
+  manifest is a clean `404` — the browser is bounded by the schema.
+- **`/data/{entity}/{id}`** is a single record: each field with its masked
+  value and a PII tag for fields that carry personal data.
+
+Records arrive **masked to the viewer's principal** — masking happens at
+the gate ([`GET /api/{entity}`](server) and `/{id}`), before the bytes
+leave the server. The dashboard renders exactly what the API returns and
+**never unmasks**. Because the schema declares relationships but no join
+key, "follow relationships" links to the related entity's browser rather
+than running a filtered sub-query — enough to navigate the shape of the
+data. It hits the API directly, so it stays a valid check even when the
+client's own application is the thing malfunctioning.
+
 ## The audit-log viewer
 
 `/audit` is the human counterpart to [`kura log`](../machine-interface/cli-audit):

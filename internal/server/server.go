@@ -155,6 +155,7 @@ func New(cfg Config) (*Server, error) {
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
 	s.registerOverviewRoute()
+	s.registerManifestRoute()
 	s.registerAuditRoutes()
 	s.registerJobsRoutes()
 	s.registerLLMRoute()

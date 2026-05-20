@@ -1,0 +1,8 @@
+{{define "content"}}
+<section class="panel panel-narrow">
+  <span class="eyebrow">Not found</span>
+  <h1>{{.Title}}</h1>
+  {{with .Body}}<p>{{.}}</p>{{end}}
+  <p class="muted"><a href="/data">Back to the data browser</a></p>
+</section>
+{{end}}

@@ -101,6 +101,7 @@ the same — authorized and audited by construction.
 | `GET /api/users/mismatches` | `AdminReview` | admin or auditor |
 | `GET /api/policy` | `AdminReview` | admin or auditor |
 | `GET /api/overview` | `AdminReview` | admin or auditor |
+| `GET /api/manifest` | `AdminReview` | admin or auditor |
 | `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
@@ -134,6 +135,13 @@ the same — authorized and audited by construction.
   against the vendor [Directory client](identity) (Google Workspace
   Admin SDK, Microsoft Graph, or a no-op for generic OIDC, picked by
   `KURA_IDP`).
+- **`/api/manifest` exposes the schema.** It returns the
+  [schema manifest](schema-manifest) verbatim — entities, fields (with
+  their PII categories), and relationships — the one input that drives the
+  data routes, the policy IR, and the dashboard's data browser. It carries
+  schema only, never a record or a field value, so there is nothing for the
+  gate to mask; it is an `AdminReview` read so the schema (including which
+  fields carry which PII) is authorized and audited like the other reviews.
 
 ## Sign-in: the loopback OAuth/OIDC handoff
 

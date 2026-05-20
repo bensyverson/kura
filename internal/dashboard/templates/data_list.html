@@ -1,0 +1,45 @@
+{{define "content"}}
+{{with .DataList}}
+<section class="panel">
+  <span class="eyebrow"><a href="/data">Data browser</a> · Entity</span>
+  <h1 class="mono">{{.Entity}}</h1>
+  {{if .Description}}<p class="lede">{{.Description}}</p>{{end}}
+
+  {{with .Relationships}}
+  <p class="rel-line muted">Relationships:
+    {{range $i, $r := .}}{{if $i}} · {{end}}<a href="{{$r.Href}}">{{$r.Name}}</a> <span class="rel-kind">({{$r.Kind}} {{$r.Target}})</span>{{end}}
+  </p>
+  {{end}}
+
+  {{if .Records}}
+  <div class="table-scroll">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>id</th>
+          {{range .Columns}}<th>{{.}}</th>{{end}}
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Records}}
+        <tr>
+          <td class="mono"><a href="{{.Href}}">{{.ID}}</a></td>
+          {{range .Cells}}<td class="mono">{{.}}</td>{{end}}
+        </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+
+  {{if or .HasPrev .HasNext}}
+  <nav class="pager" aria-label="Pagination">
+    {{if .HasPrev}}<a class="btn pager-prev" href="{{.PrevURL}}" rel="prev">&larr; Previous</a>{{else}}<span class="btn pager-disabled" aria-disabled="true">&larr; Previous</span>{{end}}
+    {{if .HasNext}}<a class="btn pager-next" href="{{.NextURL}}" rel="next">Next &rarr;</a>{{else}}<span class="btn pager-disabled" aria-disabled="true">Next &rarr;</span>{{end}}
+  </nav>
+  {{end}}
+  {{else}}
+  <p class="muted">No records stored for this entity.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}

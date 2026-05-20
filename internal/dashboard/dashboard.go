@@ -166,7 +166,13 @@ func (s *Server) Handler() http.Handler {
 	// remote audit endpoint.
 	mux.HandleFunc("GET /audit", s.handleAudit)
 
-	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true}
+	// The Data browser is built: a manifest-driven, masked read over the
+	// remote entity routes — an index, per-entity lists, and record detail.
+	mux.HandleFunc("GET /data", s.handleDataIndex)
+	mux.HandleFunc("GET /data/{entity}", s.handleDataList)
+	mux.HandleFunc("GET /data/{entity}/{id}", s.handleDataRecord)
+
+	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true, "/data": true}
 	for _, link := range navLinks {
 		if built[link.Path] {
 			continue
@@ -334,14 +340,17 @@ func (s *Server) BoundAddr() string {
 // pageData is the view model every page renders against. Body carries
 // page-specific content (a message string today).
 type pageData struct {
-	Title     string
-	Nav       []navItem
-	Principal *identity.Principal
-	Overview  *overviewData
-	Users     *usersView
-	Policy    *policyView
-	Audit     *auditView
-	Body      any
+	Title      string
+	Nav        []navItem
+	Principal  *identity.Principal
+	Overview   *overviewData
+	Users      *usersView
+	Policy     *policyView
+	Audit      *auditView
+	DataIndex  *dataIndexView
+	DataList   *dataListView
+	DataRecord *dataRecordView
+	Body       any
 }
 
 // navItem is one primary-navigation link. Active marks the current page.

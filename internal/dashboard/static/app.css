@@ -657,6 +657,49 @@ h3 {
 }
 .pager-disabled:hover { border-color: var(--border-strong); color: var(--text-muted); }
 
+/* ── Data browser ───────────────────────────────────────────────── */
+.entity-grid {
+  list-style: none;
+  margin: var(--space-5) 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: var(--space-3);
+}
+.entity-card { margin: 0; }
+.entity-link {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100%;
+  padding: var(--space-4);
+  background: var(--surface-2);
+  border: var(--hairline) solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+}
+.entity-link:hover { text-decoration: none; border-color: var(--accent); }
+.entity-name { font-size: 1rem; font-weight: 600; }
+.entity-desc { font-size: 0.88rem; }
+.entity-meta { font-size: 0.76rem; }
+
+.rel-line { margin-top: var(--space-3); font-size: 0.9rem; }
+.rel-kind { font-size: 0.82rem; }
+.rel-list { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
+.rel-list li { margin: var(--space-1) 0; }
+
+.record-facts dt { display: flex; align-items: center; gap: var(--space-2); }
+.record-facts dd { word-break: break-word; }
+
+/* The PII tag reuses the vermilion attention pigment — a field carrying
+   personal data is exactly the kind of thing a reviewer should notice. */
+.badge-pii { background: var(--alert-weak); color: var(--alert); text-transform: none; }
+
+/* Wide record tables scroll horizontally rather than overflowing the panel. */
+.table-scroll { overflow-x: auto; margin-top: var(--space-4); }
+.table-scroll .table { margin-top: 0; }
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 44rem) {
   .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }

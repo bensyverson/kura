@@ -1,0 +1,25 @@
+{{define "content"}}
+{{with .DataIndex}}
+<section class="panel">
+  <span class="eyebrow">Data</span>
+  <h1>Data browser</h1>
+  <p class="lede">Browse the records your store holds, masked to your access. This is a sanity-check tool, not a CRM — it reads the API directly, so it stays a valid check even when your own application is the thing malfunctioning. Pick an entity to begin.</p>
+
+  {{if .Entities}}
+  <ul class="entity-grid">
+    {{range .Entities}}
+    <li class="entity-card">
+      <a class="entity-link" href="{{.Href}}">
+        <span class="entity-name mono">{{.Name}}</span>
+        {{if .Description}}<span class="entity-desc muted">{{.Description}}</span>{{end}}
+        <span class="entity-meta muted">{{.FieldCount}} field{{if ne .FieldCount 1}}s{{end}}{{if .RelCount}} · {{.RelCount}} relationship{{if ne .RelCount 1}}s{{end}}{{end}}</span>
+      </a>
+    </li>
+    {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">Your schema manifest declares no entities yet.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}
