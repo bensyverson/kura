@@ -1,0 +1,133 @@
+package data
+
+import (
+	"bytes"
+	"context"
+	"testing"
+)
+
+// PostgresStore satisfies the RecordWriter interface.
+func TestPostgresStoreIsARecordWriter(t *testing.T) {
+	var _ RecordWriter = (*PostgresStore)(nil)
+}
+
+// A record written through Insert reads back through Get with every field
+// intact: plaintext fields verbatim, encrypted fields decrypted. The write
+// runs as the RLS-bound kura_api role, so this also proves a tenant-scoped
+// write satisfies the row-level-security WITH CHECK.
+func TestPostgresStoreInsertRoundTrips(t *testing.T) {
+	env := newDataTestEnv(t)
+	tenant := newTenantID(t, env)
+	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+
+	id, err := store.Insert(context.Background(), RecordInput{
+		Entity: "patient",
+		Fields: []FieldInput{
+			{Name: "full_name", Type: "string", Value: "Jane Doe"},
+			{Name: "ssn", Type: "string", Value: "123-45-6789", Encrypted: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	if id == "" {
+		t.Fatal("Insert returned an empty id")
+	}
+
+	rec, ok, err := store.Get(context.Background(), "patient", id)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !ok {
+		t.Fatal("Get: inserted record not found")
+	}
+	if rec.Fields["full_name"] != "Jane Doe" || rec.Fields["ssn"] != "123-45-6789" {
+		t.Errorf("rec.Fields = %+v, want full_name + ssn round-tripped", rec.Fields)
+	}
+}
+
+// An Insert field flagged Encrypted is genuinely ciphertext at rest, while
+// a plaintext field lands in value_text. This is the write half of the
+// encryption guarantee whose read half TestPostgresStoreDecryptsEncryptedFields
+// covers.
+func TestPostgresStoreInsertEncryptsFlaggedFieldsAtRest(t *testing.T) {
+	env := newDataTestEnv(t)
+	tenant := newTenantID(t, env)
+	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+
+	id, err := store.Insert(context.Background(), RecordInput{
+		Entity: "patient",
+		Fields: []FieldInput{
+			{Name: "full_name", Type: "string", Value: "Jane Doe"},
+			{Name: "ssn", Type: "string", Value: "123-45-6789", Encrypted: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	raw := rawEncryptedValue(t, env, id, "ssn")
+	if len(raw) == 0 {
+		t.Fatal("ssn stored with an empty value_encrypted")
+	}
+	if bytes.Contains(raw, []byte("123-45-6789")) {
+		t.Fatal("ssn ciphertext at rest contains the plaintext")
+	}
+
+	// The plaintext field is stored in value_text, not encrypted.
+	var text string
+	var encNull bool
+	err = env.DB.QueryRow(
+		`SELECT value_text, value_encrypted IS NULL
+		   FROM kura.record_field_values
+		  WHERE record_id = $1 AND field_name = 'full_name'`, id).Scan(&text, &encNull)
+	if err != nil {
+		t.Fatalf("reading full_name row: %v", err)
+	}
+	if text != "Jane Doe" || !encNull {
+		t.Errorf("full_name stored as value_text=%q value_encrypted-is-null=%v, want plaintext", text, encNull)
+	}
+}
+
+// Detected-PII spans handed to Insert are persisted to kura.pii_spans as
+// ingestion metadata — coordinates only, never the text. This is the read
+// trail the access-review and analysis surfaces will draw on.
+func TestPostgresStoreInsertPersistsSpans(t *testing.T) {
+	env := newDataTestEnv(t)
+	tenant := newTenantID(t, env)
+	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+
+	id, err := store.Insert(context.Background(), RecordInput{
+		Entity: "patient",
+		Fields: []FieldInput{{Name: "notes", Type: "text", Value: "call John Roe", Encrypted: true}},
+		Spans: []SpanInput{
+			{Field: "notes", Category: "private_person", Offset: 5, Length: 8, Confidence: 0.91},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+
+	var category string
+	var offset, length int
+	var confidence float64
+	err = env.DB.QueryRow(
+		`SELECT category, byte_offset, byte_length, confidence
+		   FROM kura.pii_spans WHERE record_id = $1 AND field_name = 'notes'`, id).
+		Scan(&category, &offset, &length, &confidence)
+	if err != nil {
+		t.Fatalf("reading pii_spans row: %v", err)
+	}
+	if category != "private_person" || offset != 5 || length != 8 {
+		t.Errorf("span = {category:%q offset:%d length:%d}, want {private_person 5 8}", category, offset, length)
+	}
+}
