@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -53,6 +54,34 @@ type fakeRemote struct {
 	policy     cedar.Policy
 	mismatches []mismatchRow
 	mutations  []recordedMutation
+
+	// auditEvents back the Audit log viewer read; auditHits and
+	// lastAuditQuery record that the dashboard fetched the log server-side
+	// and which filter axes it forwarded, so a test can prove the viewer's
+	// filters reach the remote API.
+	auditEvents    []auditEventWire
+	auditHits      int
+	lastAuditQuery url.Values
+}
+
+// auditEventWire mirrors the remote API's audit-event JSON shape; the fake
+// uses it to serve GET /api/audit the same envelope the dashboard decodes.
+type auditEventWire struct {
+	Time    time.Time `json:"time"`
+	Kind    string    `json:"kind"`
+	Outcome string    `json:"outcome"`
+	Actor   struct {
+		Type   string `json:"type,omitempty"`
+		ID     string `json:"id,omitempty"`
+		Email  string `json:"email,omitempty"`
+		Tenant string `json:"tenant,omitempty"`
+	} `json:"actor"`
+	Action   string `json:"action,omitempty"`
+	Resource struct {
+		Entity string `json:"entity,omitempty"`
+		ID     string `json:"id,omitempty"`
+	} `json:"resource"`
+	IP string `json:"ip,omitempty"`
 }
 
 // recordedMutation is one state-changing call the dashboard's API client
@@ -151,6 +180,21 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		_ = json.NewEncoder(w).Encode(out)
 	})
 
+	mux.HandleFunc("GET /api/audit", func(w http.ResponseWriter, r *http.Request) {
+		fr.mu.Lock()
+		fr.auditHits++
+		fr.lastAuditQuery = r.URL.Query()
+		status := fr.status
+		out := auditQueryResponse{Events: append([]auditEventWire(nil), fr.auditEvents...)}
+		fr.mu.Unlock()
+		if status != 0 && status != http.StatusOK {
+			w.WriteHeader(status)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
 	record := func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		fr.mu.Lock()
@@ -187,6 +231,11 @@ type usersResponse struct {
 
 type mismatchesResponse struct {
 	Mismatches []mismatchRow `json:"mismatches"`
+}
+
+// auditQueryResponse mirrors the remote API's GET /api/audit envelope.
+type auditQueryResponse struct {
+	Events []auditEventWire `json:"events"`
 }
 
 func newTestServer(t *testing.T, remote string, tokens TokenSource) *Server {

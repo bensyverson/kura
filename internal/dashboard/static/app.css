@@ -628,6 +628,35 @@ h3 {
 .grid .yes { color: var(--accent); font-weight: 700; }
 .grid .no { color: var(--text-muted); }
 
+/* ── Audit log viewer ───────────────────────────────────────────── */
+.filter-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}
+.filter-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.filter-field .input { min-width: 12rem; }
+.filter-actions { display: flex; gap: var(--space-2); align-items: flex-end; }
+
+.log-count { margin: 0 0 var(--space-2); font-size: 0.85rem; }
+
+.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: var(--hairline) solid var(--border);
+}
+.pager-disabled {
+  color: var(--text-muted);
+  opacity: 0.5;
+  cursor: default;
+}
+.pager-disabled:hover { border-color: var(--border-strong); color: var(--text-muted); }
+
 /* ── Responsive ─────────────────────────────────────────────────── */
 @media (max-width: 44rem) {
   .topbar { gap: var(--space-3); padding: var(--space-3) var(--space-4); }

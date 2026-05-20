@@ -162,7 +162,11 @@ func (s *Server) Handler() http.Handler {
 	// policy IR.
 	mux.HandleFunc("GET /policy", s.handlePolicy)
 
-	built := map[string]bool{"/": true, "/users": true, "/policy": true}
+	// The Audit log viewer is built: a filtered, paginated read over the
+	// remote audit endpoint.
+	mux.HandleFunc("GET /audit", s.handleAudit)
+
+	built := map[string]bool{"/": true, "/users": true, "/policy": true, "/audit": true}
 	for _, link := range navLinks {
 		if built[link.Path] {
 			continue
@@ -336,6 +340,7 @@ type pageData struct {
 	Overview  *overviewData
 	Users     *usersView
 	Policy    *policyView
+	Audit     *auditView
 	Body      any
 }
 

@@ -1,0 +1,72 @@
+{{define "content"}}
+{{with .Audit}}
+{{if .Error}}<div class="banner banner-error" role="alert">{{.Error}}</div>{{end}}
+
+<section class="panel">
+  <span class="eyebrow">Audit</span>
+  <h1>Audit log</h1>
+  <p class="lede">The append-only record of every authentication, authorization, and data access decision — who did what, when, and whether it was allowed. Reading the log is itself audited; it never reveals a field value, only identifiers.</p>
+
+  <form class="filter-form" method="get" action="/audit">
+    <div class="filter-field">
+      <label class="field-label" for="f-actor">Actor</label>
+      <input id="f-actor" class="input" type="text" name="actor" value="{{.Filter.Actor}}" placeholder="name@firm.example" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="filter-field">
+      <label class="field-label" for="f-resource">Resource</label>
+      <input id="f-resource" class="input" type="text" name="resource" value="{{.Filter.Entity}}" placeholder="entity name" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="filter-field">
+      <label class="field-label" for="f-action">Action</label>
+      <input id="f-action" class="input" type="text" name="action" value="{{.Filter.Action}}" placeholder="read, delete…" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="filter-field">
+      <label class="field-label" for="f-since">Since</label>
+      <input id="f-since" class="input mono" type="text" name="since" value="{{.Filter.Since}}" placeholder="2026-05-19T00:00:00Z" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="filter-field">
+      <label class="field-label" for="f-until">Until</label>
+      <input id="f-until" class="input mono" type="text" name="until" value="{{.Filter.Until}}" placeholder="2026-05-20T00:00:00Z" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="filter-actions">
+      <button class="btn btn-primary" type="submit">Filter</button>
+      <a class="btn" href="/audit">Clear</a>
+    </div>
+  </form>
+</section>
+
+<section class="panel">
+  <span class="eyebrow">Events</span>
+  <h2>Log</h2>
+  {{if .Events}}
+  <p class="muted log-count">Showing {{.ShownFrom}}–{{.ShownTo}} of {{.Total}}, newest first.</p>
+  <table class="table">
+    <thead>
+      <tr><th>Time</th><th>Actor</th><th>Action</th><th>Resource</th><th>Outcome</th><th>IP</th></tr>
+    </thead>
+    <tbody>
+      {{range .Events}}
+      <tr class="audit-row">
+        <td class="mono">{{.Time.Format "2006-01-02 15:04:05"}}</td>
+        <td class="mono">{{if .Actor.Email}}{{.Actor.Email}}{{else}}{{.Actor.ID}}{{end}}</td>
+        <td>{{.Action}}</td>
+        <td class="mono">{{.Resource.Entity}}{{if .Resource.ID}}/{{.Resource.ID}}{{end}}</td>
+        <td><span class="badge badge-outcome-{{.Outcome}}">{{.Outcome}}</span></td>
+        <td class="mono">{{if .IP}}{{.IP}}{{else}}<span class="muted">&mdash;</span>{{end}}</td>
+      </tr>
+      {{end}}
+    </tbody>
+  </table>
+
+  {{if or .HasPrev .HasNext}}
+  <nav class="pager" aria-label="Pagination">
+    {{if .HasPrev}}<a class="btn pager-prev" href="{{.PrevURL}}" rel="prev">&larr; Newer</a>{{else}}<span class="btn pager-disabled" aria-disabled="true">&larr; Newer</span>{{end}}
+    {{if .HasNext}}<a class="btn pager-next" href="{{.NextURL}}" rel="next">Older &rarr;</a>{{else}}<span class="btn pager-disabled" aria-disabled="true">Older &rarr;</span>{{end}}
+  </nav>
+  {{end}}
+  {{else}}
+  <p class="muted">No audit events match the current filter.</p>
+  {{end}}
+</section>
+{{end}}
+{{end}}

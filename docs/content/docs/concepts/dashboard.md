@@ -93,6 +93,30 @@ structured *editor*: it reads the exact IR that editor will edit, so
 nothing here is throwaway. There is **no free-form editor** — authoring
 Cedar stays a reviewed pull request, outside the constrained IR.
 
+## The audit-log viewer
+
+`/audit` is the human counterpart to [`kura log`](../machine-interface/cli-audit):
+a filtered, paginated view over the append-only audit log. It reads
+[`GET /api/audit`](server) server-side and renders one page of events at a
+time, **newest first**.
+
+The filter form forwards the same axes the gate's `audit.Filter` exposes —
+**actor**, **resource** (the entity; named "resource" to match the
+`kura log --resource` flag), **action**, and an inclusive **since** /
+exclusive **until** RFC 3339 time window. Filtering is the remote gate's
+query, not a local sieve; the dashboard only forwards the axes and renders
+what comes back. A malformed time bound is caught before any request is made
+and surfaced as a banner, so a typo becomes a correction prompt rather than
+a `502`.
+
+Pagination is a presentation concern: the dashboard slices the filtered
+result into pages of 50 and renders **Newer**/**Older** links that carry the
+active filter forward, so paging never drops it. Every event carries
+identifiers only — actor, action, resource id, outcome, time, IP — never a
+field value, by the shape of the audit `Event` type. Reading the log is
+itself an audited `AdminReview` event, so a non-admin/auditor gets the
+sign-in or permission path, never the data.
+
 ## Why it runs locally
 
 A remote web app drags XSS, CSRF, session, and template attack surface

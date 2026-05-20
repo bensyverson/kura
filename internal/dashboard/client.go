@@ -162,6 +162,75 @@ func (c *apiClient) policy(ctx context.Context) (*cedar.Policy, error) {
 	return &p, nil
 }
 
+// auditEntry is one decoded audit event from GET /api/audit and the row
+// the viewer renders. It mirrors the remote API's wire shape — the
+// dashboard owns its own view type rather than importing the server's
+// response shape. Every field is bounded metadata; there is structurally
+// nowhere for a field value to appear, which is the whole point of the
+// audit Event type.
+type auditEntry struct {
+	Time    time.Time `json:"time"`
+	Kind    string    `json:"kind"`
+	Outcome string    `json:"outcome"`
+	Actor   struct {
+		Type   string `json:"type"`
+		ID     string `json:"id"`
+		Email  string `json:"email"`
+		Tenant string `json:"tenant"`
+	} `json:"actor"`
+	Action   string `json:"action"`
+	Resource struct {
+		Entity string `json:"entity"`
+		ID     string `json:"id"`
+	} `json:"resource"`
+	IP string `json:"ip"`
+}
+
+// auditFilter is the set of axes the viewer forwards to GET /api/audit.
+// Empty fields are omitted, so the zero filter reads the whole log. Entity
+// is the wire param "entity"; the viewer surfaces it to the operator as
+// "resource" to match the `kura log --resource` flag.
+type auditFilter struct {
+	Actor  string
+	Entity string
+	Action string
+	Since  string
+	Until  string
+}
+
+// audit reads the filtered audit log from GET /api/audit. Filtering is the
+// remote gate's query, not a local sieve — the dashboard only forwards the
+// axes and renders what comes back.
+func (c *apiClient) audit(ctx context.Context, f auditFilter) ([]auditEntry, error) {
+	q := url.Values{}
+	if f.Actor != "" {
+		q.Set("actor", f.Actor)
+	}
+	if f.Entity != "" {
+		q.Set("entity", f.Entity)
+	}
+	if f.Action != "" {
+		q.Set("action", f.Action)
+	}
+	if f.Since != "" {
+		q.Set("since", f.Since)
+	}
+	if f.Until != "" {
+		q.Set("until", f.Until)
+	}
+	path := "/api/audit"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	var body struct {
+		Events []auditEntry `json:"events"`
+	}
+	if err := c.getJSON(ctx, path, &body); err != nil {
+		return nil, err
+	}
+	return body.Events, nil
+}
+
 // mismatches reads the IdP mismatch list from GET /api/users/mismatches.
 func (c *apiClient) mismatches(ctx context.Context) ([]mismatchRow, error) {
 	var body struct {
