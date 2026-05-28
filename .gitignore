@@ -19,3 +19,15 @@ local/
 
 # dev-instance state (scripts/dev-instance.sh)
 /.dev-instance/
+
+# Terraform / OpenTofu: provider binaries, local state, plan output, and
+# real per-client tfvars are never committed. The .terraform.lock.hcl
+# (provider checksums) and *.tfvars.example ARE committed.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+*.tfvars
+!*.tfvars.example
+

@@ -1,0 +1,21 @@
+# Example per-client configuration for the Kura DO baseline. Copy to
+# terraform.tfvars in the per-client repo and edit. These values are
+# non-secret and are committed to the per-client repo. The sensitive
+# values (do_token, spaces_access_key, spaces_secret_key,
+# tailscale_auth_key) are NOT set here — they are injected at apply time
+# from Doppler as TF_VAR_* environment variables. See README.md.
+
+client_slug    = "acme"
+region         = "nyc3"
+backups_region = "sfo3"
+primary_domain = "kura.acme.example"
+
+# Sizing — raise per engagement.
+droplet_size        = "s-2vcpu-4gb"
+database_size       = "db-s-1vcpu-2gb"
+database_node_count = 1
+postgres_version    = "16"
+
+# Optional break-glass DO SSH key fingerprints. Empty: routine admin access
+# is Tailscale-only.
+ssh_key_fingerprints = []
