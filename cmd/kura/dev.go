@@ -207,7 +207,7 @@ func devSeedUsersRun(cmd *cobra.Command, _ []string) error {
 	if os.Getenv("KURA_DATABASE_URL") == "" {
 		return clio.UsageError("dev seed-users", "KURA_DATABASE_URL is not set — seeding needs the same Postgres kura serve uses")
 	}
-	_, _, users, err := buildStores(os.Getenv)
+	_, _, users, _, err := buildStores(os.Getenv)
 	if err != nil {
 		return clio.InternalError("dev seed-users", "%v", err)
 	}

@@ -1,6 +1,6 @@
 ---
 title: CLI smoke verb — kura smoke
-weight: 9
+weight: 10
 ---
 
 `kura smoke` runs an end-to-end health suite against a running `kura serve`, addressed by URL. It is one artifact with three uses:

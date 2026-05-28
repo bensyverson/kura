@@ -8,7 +8,7 @@ A **job** is an async operation Kura runs server-side: a backup, a restore, a pr
 - **Idempotency.** A retry with the same `(actor, kind, idempotency_key)` finds the existing job rather than spawning a duplicate. Retrying is always safe.
 - **Survives a process restart.** The ledger is persisted in Postgres; a worker that crashed mid-job is recovered on startup, and the next worker picks up the pending row exactly once.
 
-`kura jobs` is the read side of that ledger. The verbs that *produce* jobs — `kura backup` and `kura restore` in the next build-plan phase — call the same `POST /api/jobs` under the hood; nothing about the wire shape changes.
+`kura jobs` is the read side of that ledger. The verbs that *produce* jobs — [`kura backup` and `kura restore`](../cli-backup-restore/) — call the same `POST /api/jobs` under the hood; nothing about the wire shape changes.
 
 ## The verbs
 

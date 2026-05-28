@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,12 +32,55 @@ type fakeJobsServer struct {
 
 	// returnError forces a non-200 response for the next get call.
 	getErrorStatus int
+
+	// submitted records every POST /api/jobs submission so the backup and
+	// restore verb tests can assert on the kind, key, and params sent.
+	submitted []jobSubmission
+	// submitStatus, when non-zero, makes every POST return that status —
+	// the rejected-submission path (e.g. 400 unknown kind).
+	submitStatus int
+}
+
+// jobSubmission is one captured POST /api/jobs body.
+type jobSubmission struct {
+	kind   string
+	key    string
+	params json.RawMessage
 }
 
 func newFakeJobsServer(t *testing.T) *fakeJobsServer { return &fakeJobsServer{t: t} }
 
+// submissions returns a copy of the captured POST /api/jobs bodies.
+func (f *fakeJobsServer) submissions() []jobSubmission {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]jobSubmission(nil), f.submitted...)
+}
+
 func (f *fakeJobsServer) handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/jobs", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Kind           string          `json:"kind"`
+			IdempotencyKey string          `json:"idempotency_key"`
+			Params         json.RawMessage `json:"params"`
+		}
+		_ = json.Unmarshal(body, &req)
+		f.mu.Lock()
+		f.submitted = append(f.submitted, jobSubmission{kind: req.Kind, key: req.IdempotencyKey, params: req.Params})
+		fail := f.submitStatus
+		f.mu.Unlock()
+		if fail != 0 {
+			http.Error(w, "rejected", fail)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"job":     map[string]any{"id": "job-1", "kind": req.Kind, "status": "pending"},
+			"created": true,
+		})
+	})
 	mux.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()

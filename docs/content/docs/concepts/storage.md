@@ -64,8 +64,10 @@ other async operation.
 The orchestration lives in
 [`internal/backup`](https://github.com/bensyverson/kura/tree/main/internal/backup);
 the `pg_dump`/`pg_restore` mechanism sits behind a `Dumper` interface so the
-logic is testable without a database. The scheduled invocation and the bucket's
-concrete DO Spaces client are provisioned in the deployment-baseline phase.
+logic is testable without a database. Operators drive it with
+[`kura backup` and `kura restore`](../../machine-interface/cli-backup-restore/).
+The scheduled invocation and the bucket's concrete DO Spaces client are
+provisioned in the deployment-baseline phase.
 
 ## Retention is policy, not action
 
