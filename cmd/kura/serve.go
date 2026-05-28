@@ -23,6 +23,7 @@ import (
 	"github.com/bensyverson/kura/internal/pii"
 	"github.com/bensyverson/kura/internal/review"
 	"github.com/bensyverson/kura/internal/server"
+	"github.com/bensyverson/kura/internal/storage"
 	"github.com/spf13/cobra"
 )
 
@@ -123,6 +124,22 @@ Configuration is read from the environment:
   KURA_RECORD_ENCRYPTION_KEY app-managed key the Postgres record store
                              decrypts encrypted fields with (required when
                              KURA_DATABASE_URL is set)
+  KURA_DO_SPACES_ENDPOINT    DO Spaces (S3-compatible) host without scheme,
+                             e.g. nyc3.digitaloceanspaces.com. Setting it
+                             turns on the backup/restore job kinds; unset,
+                             they stay unregistered and POST /api/jobs for
+                             them answers 400. The following five are
+                             required once it is set
+  KURA_DO_SPACES_REGION      Spaces region slug, e.g. nyc3
+  KURA_DO_SPACES_ACCESS_KEY  access key for the backups bucket's credential
+                             domain
+  KURA_DO_SPACES_SECRET_KEY  secret key paired with the access key
+  KURA_DO_SPACES_BACKUPS_BUCKET
+                             concrete name of the backups bucket the IaC
+                             provisioned for this deployment
+  KURA_BACKUP_ENCRYPTION_KEY high-entropy secret the backup dump is
+                             encrypted under; distinct from
+                             KURA_RECORD_ENCRYPTION_KEY by design
   KURA_MANIFEST_PATH         path to the schema manifest file. When set,
                              the gate enforces against it and the API grows
                              a data route per declared entity; an invalid
@@ -217,10 +234,10 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	}
 
 	// The jobs ledger shares the same pool as the data stores. The backup
-	// Service is wired here when its storage is configured; until Phase 6
-	// provides the object-store client it is nil, so no backup/restore
+	// Service is wired here when KURA_DO_SPACES_ENDPOINT is configured;
+	// with no Spaces backups configured it is nil, so no backup/restore
 	// kinds are registered.
-	backupSvc, err := buildBackupService(getenv, recorder, pool)
+	backupSvc, err := buildBackupService(getenv, recorder)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -348,9 +365,9 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 // kura serve relies on; with no pool it uses the in-memory store (the
 // credential-less dev/bare path). When a backup Service is wired it
 // registers the backup/restore kinds so the worker can run them. With no
-// Service — the production reality until the Phase 6 object-store client
-// (Bpp3j) lands — no kinds are registered, and POST /api/jobs{kind:backup}
-// answers a clear 400 rather than enqueuing work no worker can run.
+// Service — when KURA_DO_SPACES_ENDPOINT is unconfigured — no kinds are
+// registered, and POST /api/jobs{kind:backup} answers a clear 400 rather
+// than enqueuing work no worker can run.
 func buildJobsManager(pool *sql.DB, tenantID string, svc *backup.Service) (*jobs.Manager, error) {
 	var store jobs.Store
 	if pool != nil {
@@ -371,15 +388,80 @@ func buildJobsManager(pool *sql.DB, tenantID string, svc *backup.Service) (*jobs
 
 // buildBackupService constructs the backup.Service that backs the
 // backup/restore job kinds, or returns nil when no backups storage is
-// configured. The concrete object-store client (DigitalOcean Spaces) and
-// the secrets backend that sources the backup encryption key are the
-// Phase 6 deployment-baseline tasks (Bpp3j); until they land there is no
-// production backups Store, so this returns nil and the backup/restore
-// kinds stay unregistered. The seam is here so Phase 6 has a single place
-// to assemble the Service (Dumper, append-only Store, secrets-sourced key,
-// recorder, DSN) and have kura serve register it automatically.
-func buildBackupService(_ func(string) string, _ *audit.Recorder, _ *sql.DB) (*backup.Service, error) {
-	return nil, nil
+// configured. KURA_DO_SPACES_ENDPOINT is the opt-in: with it unset there
+// is no backups bucket, so this returns nil and the backup/restore kinds
+// stay unregistered (the dev/bare path, and a deployment that has not yet
+// turned backups on). Once the endpoint is set, the companions become
+// required — a half-wired backup tier is worse than none — and a loud
+// error keeps the server from starting with backups it cannot actually
+// run.
+//
+// The Service is assembled from a PGDumper, the append-only DO Spaces
+// backups Store, the backup-encryption key derived from
+// KURA_BACKUP_ENCRYPTION_KEY (distinct from the runtime
+// KURA_RECORD_ENCRYPTION_KEY), the recorder, and the database DSN it
+// dumps. buildJobsManager registers it automatically.
+func buildBackupService(getenv func(string) string, recorder *audit.Recorder) (*backup.Service, error) {
+	endpoint := getenv("KURA_DO_SPACES_ENDPOINT")
+	if endpoint == "" {
+		return nil, nil
+	}
+
+	required := func(key string) (string, error) {
+		if v := getenv(key); v != "" {
+			return v, nil
+		}
+		return "", fmt.Errorf("serve: required environment variable %s is not set (required when KURA_DO_SPACES_ENDPOINT is set)", key)
+	}
+	region, err := required("KURA_DO_SPACES_REGION")
+	if err != nil {
+		return nil, err
+	}
+	accessKey, err := required("KURA_DO_SPACES_ACCESS_KEY")
+	if err != nil {
+		return nil, err
+	}
+	secretKey, err := required("KURA_DO_SPACES_SECRET_KEY")
+	if err != nil {
+		return nil, err
+	}
+	bucket, err := required("KURA_DO_SPACES_BACKUPS_BUCKET")
+	if err != nil {
+		return nil, err
+	}
+	backupKey, err := required("KURA_BACKUP_ENCRYPTION_KEY")
+	if err != nil {
+		return nil, err
+	}
+	// Backups dump a database, so a backups destination with no database
+	// to back up is a configuration error.
+	dsn, err := required("KURA_DATABASE_URL")
+	if err != nil {
+		return nil, err
+	}
+
+	// The runtime writer opens the backups bucket append-only: it appends
+	// new dumps and cannot overwrite or delete prior ones. Real DO Spaces
+	// is always TLS.
+	store, err := storage.NewSpaces(storage.BackupsSpec(), storage.AppendOnly, storage.SpacesConfig{
+		Endpoint:  endpoint,
+		Region:    region,
+		AccessKey: accessKey,
+		SecretKey: secretKey,
+		Bucket:    bucket,
+		UseSSL:    true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("serve: building backups store: %w", err)
+	}
+
+	return &backup.Service{
+		Dumper:   backup.PGDumper{},
+		Store:    store,
+		Key:      backup.DeriveKey(backupKey),
+		Recorder: recorder,
+		DSN:      dsn,
+	}, nil
 }
 
 // buildManifest loads the schema manifest the gate enforces against and
