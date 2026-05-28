@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bensyverson/kura/internal/audit"
+	"github.com/bensyverson/kura/internal/backup"
 	"github.com/bensyverson/kura/internal/cedar"
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/db"
@@ -209,7 +211,20 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	// same user store both resolves roles for the gate and is the admin
 	// endpoints' management surface, so enforcement and management never
 	// drift.
-	records, writer, users, err := buildStores(getenv)
+	records, writer, users, pool, err := buildStores(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
+
+	// The jobs ledger shares the same pool as the data stores. The backup
+	// Service is wired here when its storage is configured; until Phase 6
+	// provides the object-store client it is nil, so no backup/restore
+	// kinds are registered.
+	backupSvc, err := buildBackupService(getenv, recorder, pool)
+	if err != nil {
+		return server.Config{}, err
+	}
+	jobsMgr, err := buildJobsManager(pool, getenv("KURA_DB_TENANT_ID"), backupSvc)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -248,14 +263,13 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// noopDirectory for generic OIDC (no portable directory API).
 		// buildDirectory picks the implementation from KURA_IDP.
 		IdP: dir,
-		// Jobs is the async-jobs ledger and worker. The Postgres-backed
-		// store is its own build-plan task; until it lands, kura serve
-		// uses MemStore — restart-survivability gets exercised by the
-		// internal/jobs integration tests rather than at this surface.
-		// No kinds are registered here; the build-plan tasks that
-		// produce long-running operations (backup/restore) will call
-		// Jobs.Register before Run.
-		Jobs: jobs.NewManager(jobs.NewMemStore()),
+		// Jobs is the async-jobs ledger and worker, built by
+		// buildJobsManager: Postgres-backed when a database is configured
+		// (restart-survivable), in-memory otherwise. The backup/restore
+		// kinds are registered when a backup Service is wired; until the
+		// Phase 6 object-store client lands there is none, so submitting
+		// those kinds answers a 400. server.Run drives ResetOrphans + Run.
+		Jobs: jobsMgr,
 		// MemStore is the v1 backing for access-review artifacts. The
 		// Postgres-backed review.Store is integration-tested in
 		// internal/review; until the dev-bringup wiring selects it, kura
@@ -272,17 +286,19 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 // buildStores selects the record and user stores from the environment.
 // With KURA_DATABASE_URL set it opens the configured Postgres database,
 // runs any pending migrations against it, and returns the Postgres-backed
-// stores; the companion KURA_DB_TENANT_ID and KURA_RECORD_ENCRYPTION_KEY
-// are then required, and a non-TLS DSN is refused. With no database URL it
-// returns the in-memory stores — the credential-less dev/bare path — so a
-// server with no DB configured behaves exactly as before. Both stores
-// share one pool: the user store also resolves roles for the gate, so a
-// single connection serves enforcement and management alike.
-func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWriter, data.UserStore, error) {
+// stores plus the open pool; the companion KURA_DB_TENANT_ID and
+// KURA_RECORD_ENCRYPTION_KEY are then required, and a non-TLS DSN is
+// refused. With no database URL it returns the in-memory stores and a nil
+// pool — the credential-less dev/bare path — so a server with no DB
+// configured behaves exactly as before. All stores share one pool: the
+// user store resolves roles for the gate and the jobs ledger persists work
+// against the same database, so a single connection serves enforcement,
+// management, and the async ledger alike.
+func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWriter, data.UserStore, *sql.DB, error) {
 	dsn := getenv("KURA_DATABASE_URL")
 	if dsn == "" {
 		mem := data.NewMemStore()
-		return mem, mem, data.NewMemUserStore(), nil
+		return mem, mem, data.NewMemUserStore(), nil, nil
 	}
 
 	required := func(key string) (string, error) {
@@ -293,11 +309,11 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	}
 	tenantID, err := required("KURA_DB_TENANT_ID")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 	encKey, err := required("KURA_RECORD_ENCRYPTION_KEY")
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	// Open validates the DSN — refusing any non-TLS connection — before the
@@ -305,26 +321,65 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	// any unreachable-host failure) happens during Migrate below.
 	pool, err := db.Open(dsn)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("serve: opening database: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening database: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
 	defer cancel()
 	if err := db.Migrate(ctx, pool); err != nil {
 		pool.Close()
-		return nil, nil, nil, fmt.Errorf("serve: running migrations: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("serve: running migrations: %w", err)
 	}
 
 	pg, err := data.NewPostgresStore(pool, tenantID, encKey)
 	if err != nil {
 		pool.Close()
-		return nil, nil, nil, fmt.Errorf("serve: building record store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("serve: building record store: %w", err)
 	}
 	users, err := data.NewPostgresUserStore(pool, tenantID)
 	if err != nil {
 		pool.Close()
-		return nil, nil, nil, fmt.Errorf("serve: building user store: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("serve: building user store: %w", err)
 	}
-	return pg, pg, users, nil
+	return pg, pg, users, pool, nil
+}
+
+// buildJobsManager builds the async-jobs Manager. With a database pool it
+// is backed by the Postgres jobs store — the restart-survivable ledger
+// kura serve relies on; with no pool it uses the in-memory store (the
+// credential-less dev/bare path). When a backup Service is wired it
+// registers the backup/restore kinds so the worker can run them. With no
+// Service — the production reality until the Phase 6 object-store client
+// (Bpp3j) lands — no kinds are registered, and POST /api/jobs{kind:backup}
+// answers a clear 400 rather than enqueuing work no worker can run.
+func buildJobsManager(pool *sql.DB, tenantID string, svc *backup.Service) (*jobs.Manager, error) {
+	var store jobs.Store
+	if pool != nil {
+		ps, err := jobs.NewPostgresStore(pool, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("serve: building jobs store: %w", err)
+		}
+		store = ps
+	} else {
+		store = jobs.NewMemStore()
+	}
+	mgr := jobs.NewManager(store)
+	if svc != nil {
+		svc.Register(mgr)
+	}
+	return mgr, nil
+}
+
+// buildBackupService constructs the backup.Service that backs the
+// backup/restore job kinds, or returns nil when no backups storage is
+// configured. The concrete object-store client (DigitalOcean Spaces) and
+// the secrets backend that sources the backup encryption key are the
+// Phase 6 deployment-baseline tasks (Bpp3j); until they land there is no
+// production backups Store, so this returns nil and the backup/restore
+// kinds stay unregistered. The seam is here so Phase 6 has a single place
+// to assemble the Service (Dumper, append-only Store, secrets-sourced key,
+// recorder, DSN) and have kura serve register it automatically.
+func buildBackupService(_ func(string) string, _ *audit.Recorder, _ *sql.DB) (*backup.Service, error) {
+	return nil, nil
 }
 
 // buildManifest loads the schema manifest the gate enforces against and

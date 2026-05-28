@@ -58,6 +58,8 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newLogCmd())
 	cmd.AddCommand(newTailCmd())
 	cmd.AddCommand(newJobsCmd())
+	cmd.AddCommand(newBackupCmd())
+	cmd.AddCommand(newRestoreCmd())
 	cmd.AddCommand(newSmokeCmd())
 	cmd.AddCommand(newDevCmd())
 	cmd.AddCommand(newVersionCmd())

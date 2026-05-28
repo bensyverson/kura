@@ -275,6 +275,141 @@ func TestJobsListIsActorScoped(t *testing.T) {
 	}
 }
 
+// The server stamps the authenticated principal into the job params,
+// overwriting whatever the client sent. Identity is asserted by the
+// server that authenticated the request — a caller cannot impersonate
+// someone else by hand-crafting params.actor. The full principal
+// (including Tenant) is carried through, and the client's other params
+// fields are preserved.
+func TestJobsSubmitStampsAuthenticatedPrincipalOverClientActor(t *testing.T) {
+	h := newJobsTestHarness(t)
+	gotParams := make(chan json.RawMessage, 1)
+	h.mgr.Register("capture", func(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
+		gotParams <- params
+		return nil, nil
+	})
+	tok := h.seedActor(t, "admin@client.com", identity.PrincipalAdmin, "admin")
+	base, stop := h.startListener(t)
+	defer stop()
+
+	// The client tries to impersonate someone in another tenant.
+	body, _ := json.Marshal(map[string]any{
+		"kind":            "capture",
+		"idempotency_key": "k-1",
+		"params": map[string]any{
+			"actor": map[string]any{
+				"type":   "human",
+				"id":     "evil@attacker.com",
+				"email":  "evil@attacker.com",
+				"tenant": "attacker.com",
+			},
+			"object_key": "backup-x.dump.enc",
+		},
+	})
+	resp, err := postJSON(base+"/api/jobs", tok, body)
+	if err != nil {
+		t.Fatalf("POST /api/jobs: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST status = %d, body = %s", resp.StatusCode, mustString(resp.Body))
+	}
+	resp.Body.Close()
+
+	var raw json.RawMessage
+	select {
+	case raw = <-gotParams:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler was never invoked")
+	}
+	var p struct {
+		Actor     identity.Principal `json:"actor"`
+		ObjectKey string             `json:"object_key"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("decode stamped params: %v", err)
+	}
+	if p.Actor.Email != "admin@client.com" {
+		t.Errorf("stamped actor email = %q; want admin@client.com (client actor not overwritten)", p.Actor.Email)
+	}
+	if p.Actor.Tenant != "client.com" {
+		t.Errorf("stamped actor tenant = %q; want client.com (full principal not preserved)", p.Actor.Tenant)
+	}
+	if p.ObjectKey != "backup-x.dump.enc" {
+		t.Errorf("object_key = %q; want backup-x.dump.enc (other params clobbered)", p.ObjectKey)
+	}
+}
+
+// When the client sends params with no actor at all, the server injects
+// the authenticated principal — every job kind's handler can rely on
+// params.actor naming the real caller.
+func TestJobsSubmitInjectsPrincipalWhenParamsHaveNoActor(t *testing.T) {
+	h := newJobsTestHarness(t)
+	gotParams := make(chan json.RawMessage, 1)
+	h.mgr.Register("capture", func(_ context.Context, params json.RawMessage) (json.RawMessage, error) {
+		gotParams <- params
+		return nil, nil
+	})
+	tok := h.seedActor(t, "admin@client.com", identity.PrincipalAdmin, "admin")
+	base, stop := h.startListener(t)
+	defer stop()
+
+	// No params field at all — the CLI's backup verb submits exactly this.
+	body, _ := json.Marshal(map[string]any{
+		"kind":            "capture",
+		"idempotency_key": "k-1",
+	})
+	resp, err := postJSON(base+"/api/jobs", tok, body)
+	if err != nil {
+		t.Fatalf("POST /api/jobs: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST status = %d, body = %s", resp.StatusCode, mustString(resp.Body))
+	}
+	resp.Body.Close()
+
+	var raw json.RawMessage
+	select {
+	case raw = <-gotParams:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler was never invoked")
+	}
+	var p struct {
+		Actor identity.Principal `json:"actor"`
+	}
+	if err := json.Unmarshal(raw, &p); err != nil {
+		t.Fatalf("decode stamped params: %v", err)
+	}
+	if p.Actor.Email != "admin@client.com" {
+		t.Errorf("injected actor email = %q; want admin@client.com", p.Actor.Email)
+	}
+	if p.Actor.Tenant != "client.com" {
+		t.Errorf("injected actor tenant = %q; want client.com", p.Actor.Tenant)
+	}
+}
+
+// Params that are present but not a JSON object cannot carry an actor, so
+// the server rejects them with a 400 rather than silently dropping the
+// identity stamp.
+func TestJobsSubmitRejectsNonObjectParams(t *testing.T) {
+	h := newJobsTestHarness(t)
+	h.mgr.Register("capture", func(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+		return nil, nil
+	})
+	tok := h.seedActor(t, "admin@client.com", identity.PrincipalAdmin, "admin")
+	base, stop := h.startListener(t)
+	defer stop()
+	// params is a JSON array, not an object.
+	body := []byte(`{"kind":"capture","idempotency_key":"k","params":[1,2,3]}`)
+	resp, err := postJSON(base+"/api/jobs", tok, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d; want 400", resp.StatusCode)
+	}
+}
+
 // POST /api/jobs with an unknown kind is 400 — the ledger never accepts
 // work no worker can run.
 func TestJobsSubmitRejectsUnknownKind(t *testing.T) {

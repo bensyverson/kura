@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -74,6 +75,15 @@ func submitJobBinding(mgr *jobs.Manager) adminBinding {
 		if !slicesContains(mgr.Kinds(), body.Kind) {
 			return gate.AdminRequest{}, nil, errors.New("server: unknown job kind " + body.Kind)
 		}
+		// Stamp the authenticated principal into the params, overwriting
+		// whatever the client sent. Identity is asserted by the server
+		// that authenticated the request — never trusted from the client
+		// payload — so a handler reading params.actor always sees the real
+		// caller, not a value the submitter chose.
+		params, err := stampActor(body.Params, principal)
+		if err != nil {
+			return gate.AdminRequest{}, nil, err
+		}
 		actor := actorOf(principal)
 		req := gate.AdminRequest{
 			Token:    bearerToken(r),
@@ -81,7 +91,7 @@ func submitJobBinding(mgr *jobs.Manager) adminBinding {
 			Resource: audit.Resource{Entity: jobsResource, ID: body.Kind},
 		}
 		op := func(ctx context.Context) (any, error) {
-			j, created, err := mgr.Submit(ctx, actor, body.Kind, body.IdempotencyKey, body.Params)
+			j, created, err := mgr.Submit(ctx, actor, body.Kind, body.IdempotencyKey, params)
 			if err != nil {
 				return nil, err
 			}
@@ -89,6 +99,27 @@ func submitJobBinding(mgr *jobs.Manager) adminBinding {
 		}
 		return req, op, nil
 	}
+}
+
+// stampActor sets the params' "actor" field to the server-authenticated
+// principal, overwriting any client-supplied value. The full principal
+// (type, id, email, tenant) is carried through, so a handler that audits
+// names the real caller. Empty or null params become a fresh object
+// carrying just the actor; params that are present but not a JSON object
+// are rejected, since they cannot carry the identity the handlers need.
+func stampActor(params json.RawMessage, principal identity.Principal) (json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if trimmed := strings.TrimSpace(string(params)); trimmed != "" && trimmed != "null" {
+		if err := json.Unmarshal(params, &fields); err != nil {
+			return nil, fmt.Errorf("server: job params must be a JSON object: %w", err)
+		}
+	}
+	actorJSON, err := json.Marshal(principal)
+	if err != nil {
+		return nil, err
+	}
+	fields["actor"] = actorJSON
+	return json.Marshal(fields)
 }
 
 // slicesContains is a local fallback for slices.Contains so this file
