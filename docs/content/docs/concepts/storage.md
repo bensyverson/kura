@@ -66,8 +66,13 @@ The orchestration lives in
 the `pg_dump`/`pg_restore` mechanism sits behind a `Dumper` interface so the
 logic is testable without a database. Operators drive it with
 [`kura backup` and `kura restore`](../../machine-interface/cli-backup-restore/).
-The scheduled invocation and the bucket's concrete DO Spaces client are
-provisioned in the deployment-baseline phase.
+
+The bucket's concrete client is the S3-compatible `Spaces` `Store` in
+[`internal/storage`](https://github.com/bensyverson/kura/tree/main/internal/storage),
+which works against DO Spaces in production and any S3 endpoint (a local MinIO)
+under test. It enforces the `AppendOnly`/`ReadWrite` contract in Go — the belt —
+to match the deny-delete bucket policy that is the suspenders. The *scheduled*
+invocation of `kura backup` is provisioned in the deployment-baseline phase.
 
 ## Retention is policy, not action
 

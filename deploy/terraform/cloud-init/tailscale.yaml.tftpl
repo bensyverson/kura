@@ -1,0 +1,19 @@
+#cloud-config
+# Base hardening + Tailscale join for a Kura droplet. The Cloud Firewall
+# (network.tf) already denies public SSH; this brings the droplet onto the
+# tailnet so administrative SSH reaches it over Tailscale instead. Tailscale
+# SSH (--ssh) means break-glass access is authenticated through the tailnet
+# identity, not a static key on a public port.
+package_update: true
+package_upgrade: true
+
+runcmd:
+  # Install Tailscale from the official repository.
+  - ['sh', '-c', 'curl -fsSL https://tailscale.com/install.sh | sh']
+  # Join the tailnet with an ephemeral, pre-authorized key and enable
+  # Tailscale SSH. The hostname makes the node identifiable in the admin
+  # console.
+  - ['tailscale', 'up', '--authkey=${tailscale_auth_key}', '--ssh', '--hostname=${hostname}']
+  # Disable the public OpenSSH password path; admin access is Tailscale-only.
+  - ['sh', '-c', "sed -i 's/^#\\?PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config"]
+  - ['systemctl', 'restart', 'ssh']
