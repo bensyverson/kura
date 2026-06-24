@@ -102,6 +102,46 @@ An unrecognized `pii` value fails validation.
 | `target` | yes | The name of the entity this relationship points to. Must resolve. |
 | `description` | no | Human- and agent-readable summary. |
 
+### How relationships are persisted
+
+A declared relationship becomes a typed **edge** between records, stored in
+`kura.record_edges` (see [Database](../database/#relationships-typed-edges)).
+Relationships are supplied **at record creation**, in the same request as the
+record's fields, and the edge is written in the same transaction as the
+record — they commit together or not at all. Standalone post-creation
+add/remove of an edge is a mutation, and Kura has no update path yet, so it is
+deferred to that future work.
+
+Each edge is validated **at the gate** on ingest, instance by instance:
+
+- the relationship must be one the entity declares;
+- every target must be an existing record **of the declared `target` entity**
+  (a target that is missing, or is some other entity, is rejected);
+- **cardinality holds** — a `one` relationship accepts at most one target; a
+  `many` relationship accepts several.
+
+A record is created with relationships by sending `{fields, relationships}`,
+where `relationships` maps a relationship name to its target record ids. A
+`one` relationship takes a single id; a `many` relationship takes a list:
+
+```json
+{
+  "fields": { "total_cents": "4200" },
+  "relationships": {
+    "customer": ["cust-7"],
+    "line_items": ["item-1", "item-2", "item-3"]
+  }
+}
+```
+
+Here `customer` is a `one` relationship (exactly one target) and `line_items`
+is a `many` relationship (several). Endpoint ids are stored as plaintext,
+indexable uuids — relationship references are never encrypted — so a record's
+edges can be read back in either direction with `kura edges <entity> <id>
+--direction out|in` (or `GET /api/{entity}/{id}/edges`). Kura does not
+*traverse* relationships: an edge read returns ids, not the related records'
+fields; fetch a target with a second `kura show`.
+
 ## Validation
 
 A manifest that parses but does not validate is never returned — callers always get

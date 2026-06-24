@@ -19,6 +19,7 @@ never changes when a client's manifest does.
 | `kura.records` | One row per record. `entity` is a free-text discriminator; `seq` is the record's order key (see [Record ordering](#record-ordering-a-shared-sequence)). |
 | `kura.record_field_values` | One row per (record, field). A value is either a plain scalar or pgcrypto ciphertext — never both. |
 | `kura.pii_spans` | Detected-PII metadata (category, byte offset, length, confidence) produced at ingestion. The source text never lives here. |
+| `kura.record_edges` | One row per relationship edge between two records. Both endpoints are foreign keys into `kura.records` (see [Relationships](#relationships-typed-edges)). |
 | `kura.users` | The authorized-user list — one row per email allowed to hold a principal in this deployment. |
 | `kura.role_assignments` | Which roles each authorized user holds. A user with no rows here is on the list but has no access. |
 
@@ -51,6 +52,42 @@ stream with `seq > N` can step past an event that committed late and never see i
 again. The supported projection model is therefore **replay-from-scratch per subject**
 (rebuild a subject's view when it changes), not an incremental global cursor; any
 cross-stream, gap-handling progress tracking is a consumer concern Kura builds none of.
+
+## Relationships: typed edges
+
+A manifest's declared relationships are persisted as **edges** in
+`kura.record_edges` (migration `0008`) — one row per (source record,
+relationship, target record). Both endpoints are real foreign keys into
+`kura.records` (`ON DELETE CASCADE`), so an edge can **never dangle**: this is
+the structural referential integrity the generic EAV field-values cannot
+provide, and the reason edges live in their own table rather than as fields.
+
+Edges are written in the **same tenant transaction** as the record that
+declares them, so a record and its edges commit together or not at all — a
+reference can never outlive a failed write. Relationships are supplied only at
+**record creation**; standalone post-creation add/remove of an edge is a
+mutation, and Kura has no update path yet, so it is deferred to that future
+work.
+
+A few deliberate choices:
+
+- **No cardinality column.** Whether a relationship is `one` or `many` is a
+  manifest property, validated at the gate on ingest (a `one` relationship
+  rejects a second target). Storing it on the row would duplicate the source
+  of truth and could drift from it.
+- **Endpoint ids are plaintext, indexable uuids** — relationship references
+  are never encrypted. Two indexes serve the two traversal directions:
+  `(tenant_id, target_record_id, relationship)` for "edges pointing at X" and
+  `(tenant_id, source_record_id)` for "edges from X".
+- **Incoming edges order by `seq`.** "All edges pointing at subject X, in
+  order" is served by querying `target_record_id` and ordering by the *source*
+  record's [`seq`](#record-ordering-a-shared-sequence) via a join to
+  `kura.records` — the deterministic, clock-skew-immune order. This is read
+  through the gate's `Edges` method and the `GET /api/{entity}/{id}/edges`
+  route; the `kura edges` verb requires an explicit `--direction out|in`.
+
+Like every other application table, `kura.record_edges` is tenant-scoped and
+RLS **enabled and forced** from creation, keyed on the `kura.tenant_id` GUC.
 
 ## Required extensions
 

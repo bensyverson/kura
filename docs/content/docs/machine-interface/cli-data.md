@@ -1,17 +1,18 @@
 ---
-title: CLI data verbs — query & show
+title: CLI data verbs — query, show & edges
 weight: 6
 ---
 
-`kura query` and `kura show` are the CLI's window onto the records the server stores. They are manifest-driven: the entity name is just an argument, and the verbs work for any entity the manifest declares — there is no per-entity wiring in the CLI.
+`kura query`, `kura show`, and `kura edges` are the CLI's window onto the records the server stores. They are manifest-driven: the entity name is just an argument, and the verbs work for any entity the manifest declares — there is no per-entity wiring in the CLI.
 
-Both verbs are **remote-only**. They GET the server's masked data routes (`GET /api/{entity}`, `GET /api/{entity}/{id}`) over the cached bearer token; access-time masking and page bounds are the server's job, never the CLI's.
+All three are **remote-only**. They GET the server's masked data routes (`GET /api/{entity}`, `GET /api/{entity}/{id}`, `GET /api/{entity}/{id}/edges`) over the cached bearer token; access-time masking and page bounds are the server's job, never the CLI's.
 
 ## The verbs
 
 ```sh
 kura query <entity> [--limit N] [--offset M]
 kura show  <entity> <id>
+kura edges <entity> <id> --direction out|in
 ```
 
 ## Bounded by default
@@ -37,21 +38,26 @@ Every field value the CLI prints has already been masked per the caller's policy
 
 If the agent's policy hides every field on an entity, `kura show` prints an explicit "no fields visible" line rather than an empty record — the empty state is informative, not silent.
 
-## No relationship traversal
+## Edges: relationships, not traversal
 
-The manifest declares relationships between entities (`Entity.Relationships`, kind `one` / `many`, target entity), but **Kura does not traverse them**. By design:
+`kura edges` lists a record's relationship [edges](../../concepts/schema-manifest/#how-relationships-are-persisted). The `--direction` is **required** — a caller asks for one view of a record's connections explicitly, never an implied default:
+
+- `--direction out` — the record's own outgoing relationships (the edges it declared at creation).
+- `--direction in` — the incoming edges that point at the record, ordered by the source record's [sequence](../../concepts/database/#record-ordering-a-shared-sequence) (deterministic, clock-skew-immune).
+
+Each edge is a relationship name and the source and target record ids, plus the source record's `seq`. Crucially, **edges carry ids, not field values** — `kura edges` exposes *which* records are connected, not the related records' contents. So Kura surfaces relationships without **traversing** them:
 
 - `kura show <entity> <id>` returns the single record's fields, flat.
-- There is no tree-of-records shape, no implicit FK following, no joined view.
-- Manifest relationships stay declarative metadata — useful to the dashboard, the MCP, and any other surface that wants to describe the schema, but not load-bearing in the data fetch path.
+- `kura edges <entity> <id> --direction …` returns the ids it connects to; there is no tree-of-records shape, no implicit FK following, no joined view.
+- To read a connected record, follow up with a second `kura show <target-entity> <target-id>`.
 
-The stance is that Kura is the access and storage layer; clients orchestrate. If you want a patient's visits, you make a second call (`kura query visit` with a filter once filtering ships). That keeps Kura unopinionated about the *shape* of the data — clients pick whether FKs live in `_id` fields, separate join tables, denormalized JSON, or anywhere else. Kura authorizes, masks, audits, paginates; the caller composes.
+The stance is that Kura is the access and storage layer; clients orchestrate. Kura authorizes, masks, audits, paginates, and tells you how records are connected; the caller composes the shape it wants. Relationships are supplied at record creation (`kura ingest` with a `relationships` block) and read back as edges — standalone post-creation edge mutation rides with the future update path.
 
 ## Output and errors
 
 Both verbs follow the shared contract from [CLI output & errors](../cli-output):
 
-- `--json` emits the stable schema (a `{records, limit, offset}` page for query; `{entity, id, fields}` for show). Markdown is the default.
-- `KindUsage` (exit 2) when the positional shape is wrong (no entity, or `show` missing the id).
+- `--json` emits the stable schema (a `{records, limit, offset}` page for query; `{entity, id, fields}` for show; an `{edges: [...]}` list for edges). Markdown is the default.
+- `KindUsage` (exit 2) when the positional shape is wrong (no entity, `show`/`edges` missing the id, or `edges` with a missing or invalid `--direction`).
 - `KindNotFound` (exit 4) when `kura show` asks for an id the server does not have.
 - `KindAuth` (exit 3) on 401/403; `KindTransient` (exit 6) on 5xx; everything else falls through `classifyHTTPStatus` to `KindInternal`.
