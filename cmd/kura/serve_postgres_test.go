@@ -117,3 +117,52 @@ func TestServeConfigMigratesConfiguredDatabase(t *testing.T) {
 		t.Errorf("schema version after serveConfig = %d, want %d — migrations did not run on startup", got, want)
 	}
 }
+
+const appendOnlyManifestJSON = `{
+  "version": "1",
+  "entities": [
+    { "name": "person", "fields": [ { "name": "id", "type": "string" } ] },
+    { "name": "event", "append_only": true, "fields": [ { "name": "id", "type": "string" } ] }
+  ]
+}`
+
+// serveConfig reconciles the append-only entity set from the manifest at
+// startup: after boot, every entity the manifest marks append_only is present
+// in kura.append_only_entities for the configured tenant (written on the
+// elevated connection), and an entity that is not append_only is absent.
+func TestServeConfigReconcilesAppendOnlySet(t *testing.T) {
+	dsn := freshServeTestDSN(t)
+	const tenant = "11111111-1111-1111-1111-111111111111"
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = dsn
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
+	env["KURA_DB_TENANT_ID"] = tenant
+	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-record-encryption-key"
+	env["KURA_MANIFEST_PATH"] = writeManifest(t, appendOnlyManifestJSON)
+
+	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
+		t.Fatalf("serveConfig with append-only manifest: %v", err)
+	}
+
+	pool, err := db.Open(dsn)
+	if err != nil {
+		t.Fatalf("connecting to reconciled database: %v", err)
+	}
+	defer pool.Close()
+
+	count := func(entity string) int {
+		var n int
+		if err := pool.QueryRowContext(context.Background(),
+			`SELECT count(*) FROM kura.append_only_entities WHERE tenant_id = $1 AND entity = $2`,
+			tenant, entity).Scan(&n); err != nil {
+			t.Fatalf("reading append-only set for %q: %v", entity, err)
+		}
+		return n
+	}
+	if count("event") != 1 {
+		t.Error("append-only 'event' was not reconciled into the set at startup")
+	}
+	if count("person") != 0 {
+		t.Error("'person' is not append_only but appeared in the set")
+	}
+}

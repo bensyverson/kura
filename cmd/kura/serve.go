@@ -131,6 +131,12 @@ Configuration is read from the environment:
                              connection — so the runtime role cannot own
                              schema objects or write the append-only set.
                              Required when KURA_DATABASE_URL is set
+  KURA_APPEND_ONLY_ALLOW_LOOSEN
+                             set truthy to permit removing append-only
+                             protection from an entity that already has stored
+                             records (otherwise startup refuses, so a boundary
+                             is never weakened by a stray manifest edit). Every
+                             loosening is audited. Leave unset normally
   KURA_DO_SPACES_ENDPOINT    DO Spaces (S3-compatible) host without scheme,
                              e.g. nyc3.digitaloceanspaces.com. Setting it
                              turns on the backup/restore job kinds; unset,
@@ -235,8 +241,23 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	// same user store both resolves roles for the gate and is the admin
 	// endpoints' management surface, so enforcement and management never
 	// drift.
+	// The manifest is loaded before the stores: the Postgres path reconciles
+	// the append-only entity set from it at startup, on the elevated
+	// connection. KURA_APPEND_ONLY_ALLOW_LOOSEN is the explicit operator
+	// override that permits removing protection from an entity that already
+	// has stored records (every such change is audited).
+	m, err := buildManifest(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
 	records, writer, users, pool, err := buildStores(getenv)
 	if err != nil {
+		return server.Config{}, err
+	}
+	// With the schema migrated, reconcile the append-only entity set from the
+	// manifest on the elevated connection. A refused loosening fails startup
+	// loudly rather than silently weakening a boundary.
+	if err := reconcileAppendOnly(getenv, m, recorder); err != nil {
 		return server.Config{}, err
 	}
 	// The record store is also the edge reader — both the Postgres store and
@@ -256,11 +277,6 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 	jobsMgr, err := buildJobsManager(pool, getenv("KURA_DB_TENANT_ID"), backupSvc)
-	if err != nil {
-		return server.Config{}, err
-	}
-
-	m, err := buildManifest(getenv)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -392,6 +408,40 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 		return nil, nil, nil, nil, fmt.Errorf("serve: building user store: %w", err)
 	}
 	return pg, pg, users, pool, nil
+}
+
+// reconcileAppendOnly brings the database's append-only entity set into line
+// with the manifest at startup, on the elevated migrator/owner connection —
+// the only credential that may write the set. It is a no-op on the
+// credential-less in-memory path (no database means no DB-level enforcement;
+// Cedar still forbids update/delete on append-only entities). Adding
+// protection applies silently; removing it from an entity that already has
+// stored records is refused unless KURA_APPEND_ONLY_ALLOW_LOOSEN is set, so a
+// boundary is never weakened as a side effect of a manifest edit. The
+// connection is short-lived: opened here, used, and closed.
+func reconcileAppendOnly(getenv func(string) string, m *manifest.Manifest, rec *audit.Recorder) error {
+	if getenv("KURA_DATABASE_URL") == "" {
+		return nil
+	}
+	var appendOnly []string
+	for _, e := range m.Entities {
+		if e.AppendOnly {
+			appendOnly = append(appendOnly, e.Name)
+		}
+	}
+
+	adminPool, err := db.Open(getenv("KURA_ADMIN_DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("serve: opening migrator database for reconciliation: %w", err)
+	}
+	defer adminPool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
+	defer cancel()
+	if err := db.ReconcileAppendOnly(ctx, adminPool, getenv("KURA_DB_TENANT_ID"), appendOnly, rec, isTruthy(getenv("KURA_APPEND_ONLY_ALLOW_LOOSEN"))); err != nil {
+		return fmt.Errorf("serve: reconciling append-only entities: %w", err)
+	}
+	return nil
 }
 
 // buildJobsManager builds the async-jobs Manager. With a database pool it
