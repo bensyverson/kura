@@ -58,20 +58,23 @@ func (s *PostgresStore) Get(ctx context.Context, entity, id string) (Record, boo
 	err := s.inTenantTx(ctx, func(tx *sql.Tx) error {
 		// id is compared as text so a malformed (non-uuid) id simply
 		// matches nothing, rather than erroring on the uuid cast. RLS
-		// has already scoped the visible rows to this tenant.
-		if err := tx.QueryRowContext(ctx,
-			`SELECT EXISTS (SELECT 1 FROM kura.records WHERE id::text = $1 AND entity = $2)`,
-			id, entity).Scan(&found); err != nil {
+		// has already scoped the visible rows to this tenant. The record's
+		// seq comes back here so the read carries its order key.
+		var seq int64
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT seq FROM kura.records WHERE id::text = $1 AND entity = $2`,
+			id, entity).Scan(&seq); {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil
+		case err != nil:
 			return err
 		}
-		if !found {
-			return nil
-		}
+		found = true
 		fields, err := s.fieldsOf(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		rec = Record{ID: id, Fields: fields}
+		rec = Record{ID: id, Seq: seq, Fields: fields}
 		return nil
 	})
 	if err != nil {
@@ -88,20 +91,24 @@ func (s *PostgresStore) List(ctx context.Context, entity string, limit, offset i
 	var out []Record
 	err := s.inTenantTx(ctx, func(tx *sql.Tx) error {
 		rows, err := tx.QueryContext(ctx,
-			`SELECT id::text FROM kura.records
+			`SELECT id::text, seq FROM kura.records
 			 WHERE entity = $1 ORDER BY created_at, id LIMIT $2 OFFSET $3`,
 			entity, limit, offset)
 		if err != nil {
 			return err
 		}
-		var ids []string
+		type rowKey struct {
+			id  string
+			seq int64
+		}
+		var keys []rowKey
 		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
+			var k rowKey
+			if err := rows.Scan(&k.id, &k.seq); err != nil {
 				rows.Close()
 				return err
 			}
-			ids = append(ids, id)
+			keys = append(keys, k)
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -109,12 +116,12 @@ func (s *PostgresStore) List(ctx context.Context, entity string, limit, offset i
 		}
 		rows.Close()
 
-		for _, id := range ids {
-			fields, err := s.fieldsOf(ctx, tx, id)
+		for _, k := range keys {
+			fields, err := s.fieldsOf(ctx, tx, k.id)
 			if err != nil {
 				return err
 			}
-			out = append(out, Record{ID: id, Fields: fields})
+			out = append(out, Record{ID: k.id, Seq: k.seq, Fields: fields})
 		}
 		return nil
 	})

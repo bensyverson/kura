@@ -26,18 +26,24 @@ import (
 // a store failure, so Get reports it through its ok return.
 var ErrNotFound = errors.New("data: record not found")
 
-// Record is one stored record: its id and its raw field values. The
-// values are exactly as stored — unmasked. Masking happens in the gate,
-// never here.
+// Record is one stored record: its id, its monotonic sequence, and its raw
+// field values. The values are exactly as stored — unmasked. Masking
+// happens in the gate, never here.
+//
+// Seq is the record's value from the one shared sequence assigned at insert
+// (migration 0007). It is a deterministic, clock-skew-immune order key for
+// "events for a subject, ordered"; created_at carries wall-clock meaning but
+// is not the order key.
 type Record struct {
 	ID     string
+	Seq    int64
 	Fields map[string]string
 }
 
 // clone returns a deep copy of r, so a record handed out by a store can
 // be mutated by the caller without corrupting the stored copy.
 func (r Record) clone() Record {
-	return Record{ID: r.ID, Fields: maps.Clone(r.Fields)}
+	return Record{ID: r.ID, Seq: r.Seq, Fields: maps.Clone(r.Fields)}
 }
 
 // RecordStore reads stored records. It is the seam the gate's data-read
@@ -67,6 +73,11 @@ type RecordStore interface {
 type MemStore struct {
 	mu       sync.RWMutex
 	byEntity map[string][]Record
+	// seq is the in-memory stand-in for the database's shared record
+	// sequence (migration 0007): one counter across all entities, so the
+	// fake assigns the same monotonic, globally-ordered seq the Postgres
+	// store reads back from kura.records.
+	seq int64
 }
 
 var _ RecordStore = (*MemStore)(nil)
@@ -85,10 +96,18 @@ func (m *MemStore) Put(entity string, rec Record) {
 	recs := m.byEntity[entity]
 	for i := range recs {
 		if recs[i].ID == rec.ID {
+			// seq is assigned once at insert and never changes (there is no
+			// update path); a replace keeps the original record's seq.
+			rec.Seq = recs[i].Seq
 			recs[i] = rec.clone()
 			return
 		}
 	}
+	// A new record draws the next value from the shared sequence, mirroring
+	// the database's DEFAULT nextval at INSERT — so any caller-supplied Seq
+	// is overwritten, exactly as the database ignores it.
+	m.seq++
+	rec.Seq = m.seq
 	m.byEntity[entity] = append(recs, rec.clone())
 }
 

@@ -58,6 +58,8 @@ Edge endpoint ids are non-content structural keys: **plaintext, never encrypted*
 
 ## Implementation plan (`job import`)
 
+> **Import source note:** This block is reproduced (renumbered — edges migration `0007` → `0008`, `rel-pg` now blocked on the record sequence) in `project/2026-06-24-substrate-implementation-plan.md`, which is the authoritative `job import` source for the combined `Phase 9` substrate tree. Do **not** import this file directly, or the relationships subtree will be created twice. The block below is kept as the canonical rationale for the relationships breakdown.
+
 Forward-only, TDD-ordered. Each leaf lands with failing tests first, then implementation. Fakes enforce the same contract as the real store.
 
 ```yaml

@@ -16,7 +16,7 @@ never changes when a client's manifest does.
 
 | Table | Holds |
 |---|---|
-| `kura.records` | One row per record. `entity` is a free-text discriminator. |
+| `kura.records` | One row per record. `entity` is a free-text discriminator; `seq` is the record's order key (see [Record ordering](#record-ordering-a-shared-sequence)). |
 | `kura.record_field_values` | One row per (record, field). A value is either a plain scalar or pgcrypto ciphertext — never both. |
 | `kura.pii_spans` | Detected-PII metadata (category, byte offset, length, confidence) produced at ingestion. The source text never lives here. |
 | `kura.users` | The authorized-user list — one row per email allowed to hold a principal in this deployment. |
@@ -31,6 +31,26 @@ into the binary. An automatic runner (`internal/db.Migrate`) applies pending
 migrations on server startup, each in its own transaction, and records the applied
 version in `public.schema_migrations`. Migrations are never run by hand, and a
 committed migration is never edited — a schema change is always a new migration.
+
+## Record ordering: a shared sequence
+
+Every row in `kura.records` carries a `seq` — a `bigint` drawn from one shared
+Postgres sequence at insert (migration `0007`). It is the record **order key**:
+deterministic and immune to clock skew, where `created_at` is not. `created_at` is
+`now()`, which is transaction-start time, so it ties for rows written in the same
+transaction and drifts with the system clock; `seq` does neither. The sequence spans
+**all** records regardless of `entity` — ordering is a cheap (~8 bytes/row), generally
+useful property, so it is not gated on any per-entity flag. The `RecordStore` surfaces
+it as `Record.Seq`, populated identically by `MemStore` and `PostgresStore`.
+
+`seq` orders events **within a subject**: "all of subject X's records, `ORDER BY seq`"
+is correct and gap-free once those rows have committed. It is **not a safe global
+progress cursor.** A `seq` value is assigned at `INSERT` but only becomes visible at
+`COMMIT`, and transactions can commit out of order — so a reader that tracks the whole
+stream with `seq > N` can step past an event that committed late and never see it
+again. The supported projection model is therefore **replay-from-scratch per subject**
+(rebuild a subject's view when it changes), not an incremental global cursor; any
+cross-stream, gap-handling progress tracking is a consumer concern Kura builds none of.
 
 ## Required extensions
 
