@@ -45,11 +45,33 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	return apply(ctx, db, all)
+}
+
+// MigrateKeystore applies the key-store lineage to db, which must be the
+// separate key-store instance (ADR 0002), not the main kura database. The
+// two lineages are independent and numbered separately; because they target
+// different instances they each keep their own public.schema_migrations.
+// Pointing this at the main database (or Migrate at the key store) would
+// collide the version sequences, so the runtime opens a distinct pool for
+// each and runs the matching lineage.
+func MigrateKeystore(ctx context.Context, db *sql.DB) error {
+	ks, err := migrations.Keystore()
+	if err != nil {
+		return err
+	}
+	return apply(ctx, db, ks)
+}
+
+// apply runs every pending migration in ms against db, each atomically,
+// skipping those already recorded. It is the shared engine behind Migrate
+// and MigrateKeystore: the lineage differs, the runner does not.
+func apply(ctx context.Context, db *sql.DB, ms []migrations.Migration) error {
 	current, err := Version(ctx, db)
 	if err != nil {
 		return err
 	}
-	for _, m := range all {
+	for _, m := range ms {
 		if m.Number <= current {
 			continue
 		}
