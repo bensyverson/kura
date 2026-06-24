@@ -33,8 +33,19 @@ type policyEntity struct {
 // read or list.
 type policyRow struct {
 	Role       string
-	Cells      []bool
+	Cells      []policyCell
 	VisiblePII []string
+}
+
+// policyCell is one role × action square in an entity grid. It carries
+// three states, not two: Granted (allowed), neither (grantable but not
+// granted), and Unavailable (structurally impossible — an update or delete
+// on an append-only entity, which the policy can never grant). Unavailable
+// renders as N/A so a reviewer reads the immutability rather than mistaking
+// it for a permission someone forgot to grant.
+type policyCell struct {
+	Granted     bool
+	Unavailable bool
 }
 
 // handlePolicy renders the Cedar structured viewer: it reads the policy IR
@@ -51,7 +62,18 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 		s.renderAuthOrError(w, "/policy", err)
 		return
 	}
-	view := buildPolicyView(policy)
+	m, err := s.api.manifest(r.Context())
+	if err != nil {
+		s.renderAuthOrError(w, "/policy", err)
+		return
+	}
+	appendOnly := make(map[string]bool)
+	for _, e := range m.Entities {
+		if e.AppendOnly {
+			appendOnly[e.Name] = true
+		}
+	}
+	view := buildPolicyView(policy, appendOnly)
 	s.render(w, http.StatusOK, "policy", pageData{
 		Title:     "Policy",
 		Nav:       navFor("/policy"),
@@ -65,7 +87,7 @@ func (s *Server) handlePolicy(w http.ResponseWriter, r *http.Request) {
 // defines and arranges them for display: a cell per role × entity ×
 // action, the visible-PII union for reads/lists, and one plain-language
 // statement per role-with-access on each entity.
-func buildPolicyView(p *cedar.Policy) policyView {
+func buildPolicyView(p *cedar.Policy, appendOnly map[string]bool) policyView {
 	actions := cedar.AllActions()
 	actionLabels := make([]string, len(actions))
 	for i, a := range actions {
@@ -99,11 +121,15 @@ func buildPolicyView(p *cedar.Policy) policyView {
 	for _, entity := range entities {
 		grid := policyEntity{Entity: entity}
 		for _, role := range p.Roles {
-			cells := make([]bool, len(actions))
+			cells := make([]policyCell, len(actions))
 			var allowed []string
 			for i, a := range actions {
+				if appendOnly[entity] && a.IsMutation() {
+					cells[i] = policyCell{Unavailable: true}
+					continue
+				}
 				if granted[role.Name+"|"+entity+"|"+string(a)] {
-					cells[i] = true
+					cells[i] = policyCell{Granted: true}
 					allowed = append(allowed, string(a))
 				}
 			}

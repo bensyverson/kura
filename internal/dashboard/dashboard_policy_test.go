@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
 )
 
@@ -101,6 +102,84 @@ func TestPolicyPageIsReadOnly(t *testing.T) {
 	body := rec.Body.String()
 	if strings.Contains(body, "<textarea") {
 		t.Error("the Cedar viewer exposes an editor; V1 is read-only (authoring is repo/PR)")
+	}
+}
+
+// For an append-only entity, update and delete are structurally
+// unavailable, not merely ungranted: the viewer marks those cells N/A so
+// the immutability is legible, while create stays a normal granted cell and
+// a non-append-only entity's mutation cells are unaffected.
+func TestBuildPolicyViewMarksAppendOnlyMutationsUnavailable(t *testing.T) {
+	p := cedar.Policy{
+		Roles: []cedar.Role{{Name: "admin"}},
+		Grants: []cedar.Grant{
+			{Role: "admin", Entity: "order", Action: cedar.ActionCreate},
+			{Role: "admin", Entity: "order", Action: cedar.ActionRead},
+			{Role: "admin", Entity: "customer", Action: cedar.ActionUpdate},
+		},
+	}
+	view := buildPolicyView(&p, map[string]bool{"order": true})
+
+	cellFor := func(entity, role string, action cedar.Action) policyCell {
+		t.Helper()
+		for _, e := range view.Entities {
+			if e.Entity != entity {
+				continue
+			}
+			for _, r := range e.Rows {
+				if r.Role != role {
+					continue
+				}
+				for i, a := range view.Actions {
+					if a == string(action) {
+						return r.Cells[i]
+					}
+				}
+			}
+		}
+		t.Fatalf("no cell for %s/%s/%s", entity, role, action)
+		return policyCell{}
+	}
+
+	for _, a := range []cedar.Action{cedar.ActionUpdate, cedar.ActionDelete} {
+		c := cellFor("order", "admin", a)
+		if !c.Unavailable {
+			t.Errorf("order/%s should be N/A on an append-only entity", a)
+		}
+		if c.Granted {
+			t.Errorf("order/%s should not be granted", a)
+		}
+	}
+	if c := cellFor("order", "admin", cedar.ActionCreate); c.Unavailable || !c.Granted {
+		t.Errorf("order/create should be a granted, available cell: %+v", c)
+	}
+	if c := cellFor("customer", "admin", cedar.ActionUpdate); c.Unavailable {
+		t.Errorf("customer/update should not be N/A on a non-append-only entity")
+	}
+}
+
+// End-to-end: the policy page renders N/A for an append-only entity's
+// update/delete, derived from the manifest the page fetches alongside the
+// policy.
+func TestPolicyPageShowsNAForAppendOnly(t *testing.T) {
+	fr := newFakeRemote(t)
+	m := manifest.Manifest{
+		Version: "1",
+		Entities: []manifest.Entity{
+			{Name: "order", AppendOnly: true, Fields: []manifest.Field{{Name: "id", Type: manifest.FieldString}}},
+		},
+	}
+	fr.schema = m
+	fr.policy = *cedar.DefaultPolicy(&m)
+	s := newTestServer(t, fr.URL, staticToken{token: "tok"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/policy"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /policy = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "N/A") {
+		t.Errorf("append-only entity should render N/A for update/delete; body:\n%s", rec.Body.String())
 	}
 }
 
