@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -23,12 +24,23 @@ func (s *Server) registerEntityRoutes() {
 		entity := e.Name
 		s.registerData("GET /api/"+entity+"/{id}", getBinding(entity, s.cfg.Records))
 		s.registerListData("GET /api/"+entity, listBindingFor(entity, s.cfg.Records))
+		s.registerEdges("GET /api/"+entity+"/{id}/edges", edgesBindingFor(entity, s.cfg.Edges))
 		s.registerIngest("POST /api/"+entity, ingestBindingFor(entity, s.cfg.Records, s.cfg.Writer))
 	}
 }
 
+// ingestBody is the wire shape of a record-ingestion request: the field
+// values to store and, optionally, the relationship edges to create with the
+// record. relationships maps a relationship name declared on the entity to
+// the ids of the target records it points at; it is omitted when the record
+// has none.
+type ingestBody struct {
+	Fields        map[string]string   `json:"fields"`
+	Relationships map[string][]string `json:"relationships,omitempty"`
+}
+
 // ingestBindingFor builds the binding for an entity's ingestion route: it
-// decodes the request body into a field map and names the gate
+// decodes the request body into fields and relationships and names the gate
 // IngestRequest, supplies a RecordExists that resolves relationship targets
 // through the read store, and supplies a Writer that persists what the gate
 // classified by mapping the gate's WriteRecord onto the store's RecordInput.
@@ -36,14 +48,15 @@ func (s *Server) registerEntityRoutes() {
 // ever runs.
 func ingestBindingFor(entity string, store data.RecordStore, writer data.RecordWriter) ingestBinding {
 	return func(r *http.Request, _ identity.Principal) (gate.IngestRequest, gate.RecordExists, gate.Writer, error) {
-		var fields map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
+		var body ingestBody
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			return gate.IngestRequest{}, nil, nil, err
 		}
 		req := gate.IngestRequest{
-			Token:  bearerToken(r),
-			Entity: entity,
-			Fields: fields,
+			Token:         bearerToken(r),
+			Entity:        entity,
+			Fields:        body.Fields,
+			Relationships: body.Relationships,
 		}
 		exists := func(ctx context.Context, targetEntity, id string) (bool, error) {
 			_, ok, err := store.Get(ctx, targetEntity, id)
@@ -83,6 +96,45 @@ func toRecordInput(entity string, rec gate.WriteRecord) data.RecordInput {
 		}
 	}
 	return in
+}
+
+// edgesBindingFor builds the binding for an entity's edges route: it reads
+// the record id from the path and a required direction query parameter, then
+// supplies an EdgesFetcher backed by the edge reader. direction=out reads the
+// record's own outgoing edges (the relationships it declared); direction=in
+// reads the incoming edges that point at it, which the store orders by the
+// source record's sequence. The direction is required — a caller asks for one
+// view of a record's connections explicitly, never an implied default.
+func edgesBindingFor(entity string, edges data.EdgeReader) edgesBinding {
+	return func(r *http.Request, _ identity.Principal) (gate.EdgesRequest, gate.EdgesFetcher, error) {
+		id := r.PathValue("id")
+		var read func(context.Context, string) ([]data.Edge, error)
+		switch r.URL.Query().Get("direction") {
+		case "out":
+			read = edges.EdgesBySource
+		case "in":
+			read = edges.EdgesByTarget
+		default:
+			return gate.EdgesRequest{}, nil, fmt.Errorf("edges: direction query parameter must be \"out\" or \"in\"")
+		}
+		req := gate.EdgesRequest{
+			Token:      bearerToken(r),
+			Entity:     entity,
+			ResourceID: id,
+		}
+		fetch := func(ctx context.Context) ([]gate.EdgeView, error) {
+			es, err := read(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			views := make([]gate.EdgeView, len(es))
+			for i, e := range es {
+				views[i] = gate.EdgeView{Relationship: e.Relationship, SourceID: e.SourceID, SourceSeq: e.SourceSeq, TargetID: e.TargetID}
+			}
+			return views, nil
+		}
+		return req, fetch, nil
+	}
 }
 
 // getBinding builds the binding for an entity's single-record route: it

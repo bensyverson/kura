@@ -39,6 +39,12 @@ type dataBinding func(r *http.Request, p identity.Principal) (gate.AccessRequest
 // touches the ResponseWriter.
 type listBinding func(r *http.Request, p identity.Principal) (gate.ListRequest, gate.ListFetcher, error)
 
+// edgesBinding translates an authenticated request into a gate EdgesRequest
+// and the EdgesFetcher that reads the record's edges. Like the other read
+// bindings it never touches the ResponseWriter: it describes the request and
+// supplies the read, and the handler renders the result.
+type edgesBinding func(r *http.Request, p identity.Principal) (gate.EdgesRequest, gate.EdgesFetcher, error)
+
 // gatedHandler serves a single record. It owns the call to Gate.Access
 // and the serialization of the masked result; the dataBinding it wraps
 // never touches the ResponseWriter.
@@ -118,6 +124,58 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	out := listResponse{Records: make([]recordJSON, len(res.Records)), Limit: res.Limit, Offset: res.Offset}
 	for i, rec := range res.Records {
 		out.Records[i] = recordJSON{ID: rec.ID, Fields: rec.Fields}
+	}
+	writeJSON(w, out)
+}
+
+// gatedEdgesHandler serves a record's relationship edges. It owns the call
+// to Gate.Edges and the serialization of the result; the edgesBinding it
+// wraps never touches the ResponseWriter.
+type gatedEdgesHandler struct {
+	gate    *gate.Gate
+	binding edgesBinding
+}
+
+func (*gatedEdgesHandler) gatedThroughCore() {}
+
+// edgeJSON is one edge in an edges response: the relationship name, the two
+// record ids it connects, and the source record's sequence (its order key).
+type edgeJSON struct {
+	Relationship string `json:"relationship"`
+	SourceID     string `json:"source_id"`
+	SourceSeq    int64  `json:"source_seq"`
+	TargetID     string `json:"target_id"`
+}
+
+// edgesResponse is the body of an edges endpoint: the record's edges, in the
+// order the gate returned them (the store orders incoming edges by the source
+// record's sequence).
+type edgesResponse struct {
+	Edges []edgeJSON `json:"edges"`
+}
+
+// ServeHTTP runs the bound edges request through the gate and writes the
+// edges as JSON. The binding only describes the EdgesRequest and the fetch;
+// the gate authorizes and audits the read.
+func (h *gatedEdgesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, fetch, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	res, err := h.gate.Edges(r.Context(), req, fetch)
+	if err != nil {
+		writeGateError(w, err)
+		return
+	}
+	out := edgesResponse{Edges: make([]edgeJSON, len(res.Edges))}
+	for i, e := range res.Edges {
+		out.Edges[i] = edgeJSON{Relationship: e.Relationship, SourceID: e.SourceID, SourceSeq: e.SourceSeq, TargetID: e.TargetID}
 	}
 	writeJSON(w, out)
 }
@@ -239,6 +297,9 @@ func writeGateError(w http.ResponseWriter, err error) {
 	case errors.Is(err, review.ErrClosed):
 		http.Error(w, "conflict: the review is completed", http.StatusConflict)
 	case errors.Is(err, gate.ErrUnknownField),
+		errors.Is(err, gate.ErrUnknownRelationship),
+		errors.Is(err, gate.ErrCardinality),
+		errors.Is(err, gate.ErrEdgeTarget),
 		errors.Is(err, review.ErrInvalidDecision),
 		errors.Is(err, review.ErrEmptyReview):
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -273,6 +334,16 @@ func (s *Server) registerListData(pattern string, binding listBinding) {
 		s.apiRoutes = make(map[string]gatedRoute)
 	}
 	s.apiRoutes[pattern] = &gatedListHandler{gate: s.cfg.Gate, binding: binding}
+}
+
+// registerEdges mounts a record's edges route under /api/. Like the other
+// data registrars it produces a gated handler — a *gatedEdgesHandler — so
+// the route goes through the gate by construction.
+func (s *Server) registerEdges(pattern string, binding edgesBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &gatedEdgesHandler{gate: s.cfg.Gate, binding: binding}
 }
 
 // registerAdmin mounts an administrative route under /api/. Like the

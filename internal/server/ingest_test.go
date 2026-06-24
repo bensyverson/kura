@@ -24,13 +24,23 @@ func ingestServer(t *testing.T) (srv *Server, mint func(id string, roles ...stri
 	t.Helper()
 	m := &manifest.Manifest{
 		Version: "1",
-		Entities: []manifest.Entity{{
-			Name: "patient",
-			Fields: []manifest.Field{
-				{Name: "full_name", Type: manifest.FieldString, PII: new(pii.CategoryPerson)},
-				{Name: "notes", Type: manifest.FieldText},
+		Entities: []manifest.Entity{
+			{
+				Name:   "provider",
+				Fields: []manifest.Field{{Name: "name", Type: manifest.FieldString}},
 			},
-		}},
+			{
+				Name: "patient",
+				Fields: []manifest.Field{
+					{Name: "full_name", Type: manifest.FieldString, PII: new(pii.CategoryPerson)},
+					{Name: "notes", Type: manifest.FieldText},
+				},
+				Relationships: []manifest.Relationship{
+					{Name: "primary_provider", Kind: manifest.RelationshipOne, Target: "provider"},
+					{Name: "care_team", Kind: manifest.RelationshipMany, Target: "provider"},
+				},
+			},
+		},
 	}
 	evaluator, err := cedar.NewEvaluator(cedar.DefaultPolicy(m))
 	if err != nil {
@@ -49,6 +59,7 @@ func ingestServer(t *testing.T) (srv *Server, mint func(id string, roles ...stri
 	cfg.Gate = g
 	cfg.Records = store
 	cfg.Writer = store
+	cfg.Edges = store
 	srv, err = New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -93,7 +104,7 @@ func TestIngestEndpointCreatesAndReadsBackRecord(t *testing.T) {
 	srv, mint := ingestServer(t)
 	tok := mint("admin-svc", "admin")
 
-	rec := doPost(t, srv, "/api/patient", tok, `{"full_name":"New Person"}`)
+	rec := doPost(t, srv, "/api/patient", tok, `{"fields":{"full_name":"New Person"}}`)
 	if rec.status != http.StatusCreated {
 		t.Fatalf("POST status = %d, want 201; body %s", rec.status, rec.body.String())
 	}
@@ -120,13 +131,106 @@ func TestIngestEndpointCreatesAndReadsBackRecord(t *testing.T) {
 	}
 }
 
+// postAndID POSTs a body to an entity's ingestion route and returns the new
+// record's id, failing the test on a non-201.
+func postAndID(t *testing.T, srv *Server, entity, tok, body string) string {
+	t.Helper()
+	rec := doPost(t, srv, "/api/"+entity, tok, body)
+	if rec.status != http.StatusCreated {
+		t.Fatalf("POST /api/%s status = %d, want 201; body %s", entity, rec.status, rec.body.String())
+	}
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.Unmarshal(rec.body.Bytes(), &created); err != nil {
+		t.Fatalf("decoding POST body: %v", err)
+	}
+	return created.ID
+}
+
+// edgeRow mirrors one edge in the edges endpoint's JSON response.
+type edgeRow struct {
+	Relationship string `json:"relationship"`
+	SourceID     string `json:"source_id"`
+	SourceSeq    int64  `json:"source_seq"`
+	TargetID     string `json:"target_id"`
+}
+
+// getEdges GETs a record's edges in the given direction, returning the rows.
+func getEdges(t *testing.T, srv *Server, entity, id, tok, direction string) []edgeRow {
+	t.Helper()
+	got := doGet(t, srv, "/api/"+entity+"/"+id+"/edges?direction="+direction, tok)
+	if got.status != http.StatusOK {
+		t.Fatalf("GET edges status = %d, want 200; body %s", got.status, got.body.String())
+	}
+	var out struct {
+		Edges []edgeRow `json:"edges"`
+	}
+	if err := json.Unmarshal(got.body.Bytes(), &out); err != nil {
+		t.Fatalf("decoding edges body: %v", err)
+	}
+	return out.Edges
+}
+
+// A record can be created with relationships in one POST, and the edges read
+// back through the edges endpoint — outgoing from the source and incoming to
+// the target. This is the create-with-relationships round-trip end to end.
+func TestIngestEndpointCreatesRecordWithRelationship(t *testing.T) {
+	srv, mint := ingestServer(t)
+	tok := mint("admin-svc", "admin")
+
+	provID := postAndID(t, srv, "provider", tok, `{"fields":{"name":"Dr. X"}}`)
+	patID := postAndID(t, srv, "patient", tok,
+		`{"fields":{"full_name":"Jane"},"relationships":{"primary_provider":["`+provID+`"]}}`)
+
+	out := getEdges(t, srv, "patient", patID, tok, "out")
+	if len(out) != 1 || out[0].Relationship != "primary_provider" || out[0].TargetID != provID {
+		t.Fatalf("outgoing edges = %+v, want one primary_provider edge to %s", out, provID)
+	}
+	if out[0].SourceID != patID {
+		t.Errorf("outgoing edge SourceID = %q, want %q", out[0].SourceID, patID)
+	}
+
+	in := getEdges(t, srv, "provider", provID, tok, "in")
+	if len(in) != 1 || in[0].SourceID != patID || in[0].TargetID != provID {
+		t.Fatalf("incoming edges = %+v, want one edge from %s to %s", in, patID, provID)
+	}
+}
+
+// A relationship to a target that does not exist is rejected at ingest — the
+// gate's ErrEdgeTarget surfaces as a 400.
+func TestIngestEndpointRejectsMissingRelationshipTarget(t *testing.T) {
+	srv, mint := ingestServer(t)
+	tok := mint("admin-svc", "admin")
+	rec := doPost(t, srv, "/api/patient", tok,
+		`{"fields":{"full_name":"Jane"},"relationships":{"primary_provider":["ghost"]}}`)
+	if rec.status != http.StatusBadRequest {
+		t.Errorf("POST with a missing relationship target: status = %d, want 400; body %s", rec.status, rec.body.String())
+	}
+}
+
+// The edges endpoint requires an explicit direction — an omitted or invalid
+// direction is a 400, never an implied default.
+func TestEdgesEndpointRequiresDirection(t *testing.T) {
+	srv, mint := ingestServer(t)
+	tok := mint("admin-svc", "admin")
+	id := postAndID(t, srv, "provider", tok, `{"fields":{"name":"Dr. X"}}`)
+
+	if got := doGet(t, srv, "/api/provider/"+id+"/edges", tok); got.status != http.StatusBadRequest {
+		t.Errorf("GET edges with no direction: status = %d, want 400", got.status)
+	}
+	if got := doGet(t, srv, "/api/provider/"+id+"/edges?direction=sideways", tok); got.status != http.StatusBadRequest {
+		t.Errorf("GET edges with an invalid direction: status = %d, want 400", got.status)
+	}
+}
+
 // A principal whose role cannot create is forbidden — the endpoint answers
 // 403, the gate's denial surfaced.
 func TestIngestEndpointForbidsRoleThatCannotCreate(t *testing.T) {
 	srv, mint := ingestServer(t)
 	tok := mint("noroles-svc") // no roles: no create grant
 
-	rec := doPost(t, srv, "/api/patient", tok, `{"full_name":"New Person"}`)
+	rec := doPost(t, srv, "/api/patient", tok, `{"fields":{"full_name":"New Person"}}`)
 	if rec.status != http.StatusForbidden {
 		t.Errorf("POST status = %d, want 403; body %s", rec.status, rec.body.String())
 	}
@@ -135,7 +239,7 @@ func TestIngestEndpointForbidsRoleThatCannotCreate(t *testing.T) {
 // An unauthenticated POST is rejected before reaching the gate.
 func TestIngestEndpointRequiresAuth(t *testing.T) {
 	srv, _ := ingestServer(t)
-	rec := doPost(t, srv, "/api/patient", "", `{"full_name":"New Person"}`)
+	rec := doPost(t, srv, "/api/patient", "", `{"fields":{"full_name":"New Person"}}`)
 	if rec.status != http.StatusUnauthorized {
 		t.Errorf("POST status = %d, want 401; body %s", rec.status, rec.body.String())
 	}
@@ -157,7 +261,7 @@ func TestIngestEndpointRejectsMalformedBody(t *testing.T) {
 func TestIngestEndpointRejectsUnknownField(t *testing.T) {
 	srv, mint := ingestServer(t)
 	tok := mint("admin-svc", "admin")
-	rec := doPost(t, srv, "/api/patient", tok, `{"full_name":"New Person","ssn":"123-45-6789"}`)
+	rec := doPost(t, srv, "/api/patient", tok, `{"fields":{"full_name":"New Person","ssn":"123-45-6789"}}`)
 	if rec.status != http.StatusBadRequest {
 		t.Errorf("POST status = %d, want 400; body %s", rec.status, rec.body.String())
 	}

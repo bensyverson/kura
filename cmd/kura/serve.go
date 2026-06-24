@@ -232,6 +232,13 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	if err != nil {
 		return server.Config{}, err
 	}
+	// The record store is also the edge reader — both the Postgres store and
+	// the in-memory store implement EdgeReader — so the edges route reads
+	// through the same instance the gate enforces against.
+	edges, ok := records.(data.EdgeReader)
+	if !ok {
+		return server.Config{}, fmt.Errorf("serve: record store %T does not read relationship edges", records)
+	}
 
 	// The jobs ledger shares the same pool as the data stores. The backup
 	// Service is wired here when KURA_DO_SPACES_ENDPOINT is configured;
@@ -274,6 +281,7 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// same store under its read and write interfaces.
 		Records: records,
 		Writer:  writer,
+		Edges:   edges,
 		Users:   users,
 		// IdP is the vendor Directory paired with the sign-in IdP:
 		// googleDirectory for Google, microsoftDirectory for Entra,
