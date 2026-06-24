@@ -64,9 +64,17 @@ doppler run -- tofu apply
 
 After apply, wire the API server's runtime config from the outputs
 (`tofu output`): `database_private_host`, `database_name`,
-`database_user`, `backups_bucket`, `audit_log_bucket`. Set
-`KURA_DO_SPACES_*` and `KURA_DATABASE_URL` accordingly so `kura serve`
-registers the backup/restore job kinds.
+`database_user`, `database_migrator_user`, `backups_bucket`,
+`audit_log_bucket`. Set `KURA_DO_SPACES_*` and `KURA_DATABASE_URL`
+accordingly so `kura serve` registers the backup/restore job kinds.
+
+`kura serve` needs **two** database DSNs: `KURA_DATABASE_URL` for the
+runtime `kura_api` user (`database_user`) and `KURA_ADMIN_DATABASE_URL`
+for the elevated migrator/owner `kura_admin` user
+(`database_migrator_user`), which runs migrations and append-only
+reconciliation at startup. The two are a deliberate credential-domain
+separation — the runtime user cannot own schema objects or write the
+append-only set. See the [Database concept doc](../../docs/content/docs/concepts/database.md).
 
 ## Verifying the security posture
 

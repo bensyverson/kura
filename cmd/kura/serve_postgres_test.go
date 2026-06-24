@@ -60,6 +60,11 @@ func TestServeConfigSelectsPostgresStores(t *testing.T) {
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
 	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-record-encryption-key"
 
+	// The migrator/owner connection is a separate required credential. In
+	// production it is the kura_admin DSN; the test harness points both the
+	// runtime and migrator connections at the same fresh superuser database.
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
+
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
 		t.Fatalf("serveConfig with KURA_DATABASE_URL: %v", err)
@@ -85,6 +90,9 @@ func TestServeConfigMigratesConfiguredDatabase(t *testing.T) {
 	env["KURA_DATABASE_URL"] = dsn
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
 	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-record-encryption-key"
+	// Migrations run on the migrator/owner connection; in the test harness it
+	// targets the same fresh superuser database as the runtime connection.
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
 
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("serveConfig with KURA_DATABASE_URL: %v", err)

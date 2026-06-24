@@ -124,6 +124,13 @@ Configuration is read from the environment:
   KURA_RECORD_ENCRYPTION_KEY app-managed key the Postgres record store
                              decrypts encrypted fields with (required when
                              KURA_DATABASE_URL is set)
+  KURA_ADMIN_DATABASE_URL    elevated migrator/owner DSN (TLS required; the
+                             kura_admin role). Schema migrations and the
+                             append-only set are administered on this
+                             connection — never the runtime kura_api
+                             connection — so the runtime role cannot own
+                             schema objects or write the append-only set.
+                             Required when KURA_DATABASE_URL is set
   KURA_DO_SPACES_ENDPOINT    DO Spaces (S3-compatible) host without scheme,
                              e.g. nyc3.digitaloceanspaces.com. Setting it
                              turns on the backup/restore job kinds; unset,
@@ -340,20 +347,39 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
-	// Open validates the DSN — refusing any non-TLS connection — before the
-	// pool is created. The pool is lazy, so the first real connection (and
-	// any unreachable-host failure) happens during Migrate below.
+	// Two credentials, two connections. Schema evolution — and the
+	// append-only set in particular — is administered on the elevated
+	// migrator/owner connection (kura_admin), never on the runtime
+	// connection (kura_api): the runtime role must not be able to own schema
+	// objects or write the append-only set, or it could declare an entity
+	// mutable that the manifest froze. db.Open validates each DSN, refusing
+	// any non-TLS connection, before the lazy pool's first real connection.
+	adminPool, err := db.Open(adminDSN)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening migrator database: %w", err)
+	}
 	pool, err := db.Open(dsn)
 	if err != nil {
+		adminPool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: opening database: %w", err)
 	}
+
+	// Migrations run on the elevated connection so every schema object is
+	// owned by kura_admin. The first real connection (and any
+	// unreachable-host failure) happens here, during Migrate.
 	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
 	defer cancel()
-	if err := db.Migrate(ctx, pool); err != nil {
+	if err := db.Migrate(ctx, adminPool); err != nil {
+		adminPool.Close()
 		pool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: running migrations: %w", err)
 	}
+	adminPool.Close()
 
 	pg, err := data.NewPostgresStore(pool, tenantID, encKey)
 	if err != nil {

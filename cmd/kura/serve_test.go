@@ -179,9 +179,30 @@ func TestServeConfigRejectsInsecureDatabaseURL(t *testing.T) {
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=disable"
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
 	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
 		t.Fatal("serveConfig accepted a non-TLS KURA_DATABASE_URL")
+	}
+}
+
+// With KURA_DATABASE_URL set, the elevated migrator/owner DSN is also
+// required: migrations and the append-only set are administered on the
+// kura_admin credential, never the runtime kura_api connection, so a
+// deployment that configures a runtime database but no migrator credential
+// must fail startup loudly rather than run DDL as the runtime role.
+func TestServeConfigDatabaseURLRequiresAdminURL(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	delete(env, "KURA_ADMIN_DATABASE_URL")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_ADMIN_DATABASE_URL")
+	}
+	if !strings.Contains(err.Error(), "KURA_ADMIN_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
 	}
 }
 

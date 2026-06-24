@@ -133,6 +133,22 @@ initial extension/role bootstrap is run by the platform's provisioning superuser
 (for example, DigitalOcean's `doadmin`); `kura_admin` owns ongoing schema migrations.
 No component role is a superuser and none has `BYPASSRLS`.
 
+### Two connections, two credentials
+
+The server uses **two** database credentials, never one. The runtime request path
+connects as `kura_api` through `KURA_DATABASE_URL`. Schema migrations and append-only
+reconciliation run at startup on a separate elevated connection, `kura_admin`, through
+`KURA_ADMIN_DATABASE_URL` — both are required when a database is configured. This is a
+deliberate credential-domain separation, mirroring the object-storage posture (admin
+keys administer the backups bucket; runtime keys only append): `kura_admin` *owns*
+schema evolution and the append-only objects — the `BEFORE UPDATE OR DELETE` trigger
+and the `kura.append_only_entities` set — while `kura_api` has no access to that set
+at all. So a compromised runtime credential cannot clear the append-only set and
+unfreeze an entity the manifest marked insert-only; only the migrator/owner credential
+can change what is protected. In production the two DSNs name two database users
+(`…-api` and `…-migrator`); in local development, where the database has a single
+superuser, both DSNs point at it.
+
 ## Row-level security
 
 Every tenant-scoped table — all three — has row-level security **enabled and forced**.
