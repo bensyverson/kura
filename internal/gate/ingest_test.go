@@ -63,6 +63,25 @@ func captureWriter(id string) (Writer, **WriteRecord) {
 	return w, &got
 }
 
+// existsNone is a RecordExists that reports every target absent. The
+// field-classification tests carry no relationships, so it is never
+// consulted; it only satisfies Ingest's signature.
+func existsNone(_ context.Context, _, _ string) (bool, error) { return false, nil }
+
+// existsSet returns a RecordExists that reports a target present exactly when
+// its (entity, id) pair is in the set. It lets a test stand in for the store
+// without one, including the wrong-entity case: an id present under one
+// entity reports absent under another.
+func existsSet(pairs ...[2]string) RecordExists {
+	set := make(map[[2]string]bool, len(pairs))
+	for _, p := range pairs {
+		set[p] = true
+	}
+	return func(_ context.Context, entity, id string) (bool, error) {
+		return set[[2]string{entity, id}], nil
+	}
+}
+
 // fieldByName finds a classified field in a WriteRecord.
 func fieldByName(rec *WriteRecord, name string) (WriteField, bool) {
 	for _, f := range rec.Fields {
@@ -88,7 +107,7 @@ func TestIngestRunsTheFullChainForAnAuthorizedAdmin(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{"full_name": "Jane Doe", "account": "ACCT-555"},
-	}, write)
+	}, existsNone, write)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -127,7 +146,7 @@ func TestIngestClassifiesEncryptionFromTheManifest(t *testing.T) {
 			"notes":     "no pii here",
 			"nickname":  "JD",
 		},
-	}, write)
+	}, existsNone, write)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -158,7 +177,7 @@ func TestIngestEncryptsScannerDetectedHighSensitivity(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{"nickname": "SECRET-XYZ"},
-	}, write)
+	}, existsNone, write)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -182,7 +201,7 @@ func TestIngestCarriesDetectedSpans(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{"full_name": "Jane Doe"},
-	}, write)
+	}, existsNone, write)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
@@ -206,7 +225,7 @@ func TestIngestDeniesARoleThatCannotCreate(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{"full_name": "Jane Doe"},
-	}, write)
+	}, existsNone, write)
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("Ingest err = %v, want ErrDenied", err)
 	}
@@ -225,7 +244,7 @@ func TestIngestRejectsUnknownEntity(t *testing.T) {
 		Token:  tok,
 		Entity: "ghost",
 		Fields: map[string]string{"full_name": "Jane Doe"},
-	}, write)
+	}, existsNone, write)
 	if !errors.Is(err, ErrUnknownEntity) {
 		t.Fatalf("Ingest err = %v, want ErrUnknownEntity", err)
 	}
@@ -245,7 +264,7 @@ func TestIngestRejectsUnknownField(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{"full_name": "Jane Doe", "ssn": "123-45-6789"},
-	}, write)
+	}, existsNone, write)
 	if !errors.Is(err, ErrUnknownField) {
 		t.Fatalf("Ingest err = %v, want ErrUnknownField", err)
 	}

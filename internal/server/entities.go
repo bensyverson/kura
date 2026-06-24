@@ -23,31 +23,36 @@ func (s *Server) registerEntityRoutes() {
 		entity := e.Name
 		s.registerData("GET /api/"+entity+"/{id}", getBinding(entity, s.cfg.Records))
 		s.registerListData("GET /api/"+entity, listBindingFor(entity, s.cfg.Records))
-		s.registerIngest("POST /api/"+entity, ingestBindingFor(entity, s.cfg.Writer))
+		s.registerIngest("POST /api/"+entity, ingestBindingFor(entity, s.cfg.Records, s.cfg.Writer))
 	}
 }
 
 // ingestBindingFor builds the binding for an entity's ingestion route: it
 // decodes the request body into a field map and names the gate
-// IngestRequest, and supplies a Writer that persists what the gate
-// classified by mapping the gate's WriteRecord onto the store's
-// RecordInput. The gate authorizes, validates, scans, and classifies
-// before the Writer ever runs.
-func ingestBindingFor(entity string, writer data.RecordWriter) ingestBinding {
-	return func(r *http.Request, _ identity.Principal) (gate.IngestRequest, gate.Writer, error) {
+// IngestRequest, supplies a RecordExists that resolves relationship targets
+// through the read store, and supplies a Writer that persists what the gate
+// classified by mapping the gate's WriteRecord onto the store's RecordInput.
+// The gate authorizes, validates, scans, and classifies before the Writer
+// ever runs.
+func ingestBindingFor(entity string, store data.RecordStore, writer data.RecordWriter) ingestBinding {
+	return func(r *http.Request, _ identity.Principal) (gate.IngestRequest, gate.RecordExists, gate.Writer, error) {
 		var fields map[string]string
 		if err := json.NewDecoder(r.Body).Decode(&fields); err != nil {
-			return gate.IngestRequest{}, nil, err
+			return gate.IngestRequest{}, nil, nil, err
 		}
 		req := gate.IngestRequest{
 			Token:  bearerToken(r),
 			Entity: entity,
 			Fields: fields,
 		}
+		exists := func(ctx context.Context, targetEntity, id string) (bool, error) {
+			_, ok, err := store.Get(ctx, targetEntity, id)
+			return ok, err
+		}
 		write := func(ctx context.Context, rec gate.WriteRecord) (string, error) {
 			return writer.Insert(ctx, toRecordInput(entity, rec))
 		}
-		return req, write, nil
+		return req, exists, write, nil
 	}
 }
 
@@ -57,12 +62,16 @@ func ingestBindingFor(entity string, writer data.RecordWriter) ingestBinding {
 // translates to the store's.
 func toRecordInput(entity string, rec gate.WriteRecord) data.RecordInput {
 	in := data.RecordInput{
-		Entity: entity,
-		Fields: make([]data.FieldInput, len(rec.Fields)),
-		Spans:  make([]data.SpanInput, len(rec.Spans)),
+		Entity:        entity,
+		Fields:        make([]data.FieldInput, len(rec.Fields)),
+		Spans:         make([]data.SpanInput, len(rec.Spans)),
+		Relationships: make([]data.EdgeInput, len(rec.Relationships)),
 	}
 	for i, f := range rec.Fields {
 		in.Fields[i] = data.FieldInput{Name: f.Name, Type: f.Type, Value: f.Value, Encrypted: f.Encrypted}
+	}
+	for i, e := range rec.Relationships {
+		in.Relationships[i] = data.EdgeInput{Relationship: e.Relationship, TargetID: e.TargetID}
 	}
 	for i, sp := range rec.Spans {
 		in.Spans[i] = data.SpanInput{

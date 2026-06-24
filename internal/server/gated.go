@@ -127,7 +127,7 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // authorized, validated, scanned, and classified it. Like the read
 // bindings it never touches the ResponseWriter: it describes the request
 // and supplies the write, and the handler renders the outcome.
-type ingestBinding func(r *http.Request, p identity.Principal) (gate.IngestRequest, gate.Writer, error)
+type ingestBinding func(r *http.Request, p identity.Principal) (gate.IngestRequest, gate.RecordExists, gate.Writer, error)
 
 // gatedIngestHandler serves a record-ingestion endpoint. It owns the call
 // to Gate.Ingest and the rendering of the new record's id; the
@@ -154,12 +154,12 @@ func (h *gatedIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	req, write, err := h.binding(r, principal)
+	req, exists, write, err := h.binding(r, principal)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	res, err := h.gate.Ingest(r.Context(), req, write)
+	res, err := h.gate.Ingest(r.Context(), req, exists, write)
 	if err != nil {
 		writeGateError(w, err)
 		return
