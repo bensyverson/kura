@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"sort"
 	"sync"
 )
 
@@ -73,6 +74,9 @@ type RecordStore interface {
 type MemStore struct {
 	mu       sync.RWMutex
 	byEntity map[string][]Record
+	// edges holds relationship edges between records, the fake's stand-in
+	// for kura.record_edges. They are read by EdgesByTarget/EdgesBySource.
+	edges []Edge
 	// seq is the in-memory stand-in for the database's shared record
 	// sequence (migration 0007): one counter across all entities, so the
 	// fake assigns the same monotonic, globally-ordered seq the Postgres
@@ -93,6 +97,13 @@ func NewMemStore() *MemStore {
 func (m *MemStore) Put(entity string, rec Record) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.putLocked(entity, rec)
+}
+
+// putLocked stores rec under entity and returns the seq it was stored with.
+// The caller must hold m.mu. It is the shared core of Put and Insert, so a
+// record and its edges can be written under one lock.
+func (m *MemStore) putLocked(entity string, rec Record) int64 {
 	recs := m.byEntity[entity]
 	for i := range recs {
 		if recs[i].ID == rec.ID {
@@ -100,7 +111,7 @@ func (m *MemStore) Put(entity string, rec Record) {
 			// update path); a replace keeps the original record's seq.
 			rec.Seq = recs[i].Seq
 			recs[i] = rec.clone()
-			return
+			return rec.Seq
 		}
 	}
 	// A new record draws the next value from the shared sequence, mirroring
@@ -109,6 +120,21 @@ func (m *MemStore) Put(entity string, rec Record) {
 	m.seq++
 	rec.Seq = m.seq
 	m.byEntity[entity] = append(recs, rec.clone())
+	return rec.Seq
+}
+
+// hasRecordLocked reports whether a record with the given id exists under any
+// entity. The caller must hold m.mu. It is the fake's stand-in for the
+// edges' foreign key: an edge may only target a record that exists.
+func (m *MemStore) hasRecordLocked(id string) bool {
+	for _, recs := range m.byEntity {
+		for i := range recs {
+			if recs[i].ID == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Get returns the record with the given id under entity.
@@ -150,4 +176,35 @@ func (m *MemStore) Count(_ context.Context, entity string) (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.byEntity[entity]), nil
+}
+
+var _ EdgeReader = (*MemStore)(nil)
+
+// EdgesByTarget returns every edge whose target is targetID, ordered by the
+// source record's seq — mirroring the Postgres store's join-and-order so a
+// subject's referencing records read back in deterministic order.
+func (m *MemStore) EdgesByTarget(_ context.Context, targetID string) ([]Edge, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Edge
+	for _, e := range m.edges {
+		if e.TargetID == targetID {
+			out = append(out, e)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].SourceSeq < out[j].SourceSeq })
+	return out, nil
+}
+
+// EdgesBySource returns every edge originating from sourceID.
+func (m *MemStore) EdgesBySource(_ context.Context, sourceID string) ([]Edge, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Edge
+	for _, e := range m.edges {
+		if e.SourceID == sourceID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }

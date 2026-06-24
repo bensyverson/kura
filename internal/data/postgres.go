@@ -146,6 +146,58 @@ func (s *PostgresStore) Count(ctx context.Context, entity string) (int, error) {
 	return n, nil
 }
 
+var _ EdgeReader = (*PostgresStore)(nil)
+
+// EdgesByTarget returns every edge whose target is targetID, ordered by the
+// source record's seq via a join to kura.records — "all records that point at
+// this one, in order". RLS scopes the rows to the store's tenant.
+func (s *PostgresStore) EdgesByTarget(ctx context.Context, targetID string) ([]Edge, error) {
+	return s.queryEdges(ctx,
+		`SELECT e.relationship, e.source_record_id::text, r.seq, e.target_record_id::text
+		   FROM kura.record_edges e
+		   JOIN kura.records r ON r.id = e.source_record_id
+		  WHERE e.target_record_id::text = $1
+		  ORDER BY r.seq`, targetID)
+}
+
+// EdgesBySource returns every edge originating from sourceID, ordered by the
+// source record's seq for a stable result.
+func (s *PostgresStore) EdgesBySource(ctx context.Context, sourceID string) ([]Edge, error) {
+	return s.queryEdges(ctx,
+		`SELECT e.relationship, e.source_record_id::text, r.seq, e.target_record_id::text
+		   FROM kura.record_edges e
+		   JOIN kura.records r ON r.id = e.source_record_id
+		  WHERE e.source_record_id::text = $1
+		  ORDER BY r.seq`, sourceID)
+}
+
+// queryEdges runs an edge query in a tenant-scoped read transaction. The
+// endpoint id is compared as text so a malformed (non-uuid) argument simply
+// matches nothing rather than erroring on the cast — the same defence Get
+// uses for record ids.
+func (s *PostgresStore) queryEdges(ctx context.Context, query, arg string) ([]Edge, error) {
+	var out []Edge
+	err := s.inTenantTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, query, arg)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e Edge
+			if err := rows.Scan(&e.Relationship, &e.SourceID, &e.SourceSeq, &e.TargetID); err != nil {
+				return err
+			}
+			out = append(out, e)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // fieldsOf reads one record's field values, decrypting any that were
 // stored encrypted. A record with no field rows yields an empty,
 // non-nil map.

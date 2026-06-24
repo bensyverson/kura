@@ -5,7 +5,10 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // FieldInput is one field to persist, carrying the storage decisions the
@@ -32,13 +35,19 @@ type SpanInput struct {
 }
 
 // RecordInput is a complete record to persist: its entity, its field
-// values with per-field storage decisions, and the PII spans detected at
-// ingestion. It is what the gate's Ingest hands the write seam after it
-// has authorized, validated, scanned, and classified the record.
+// values with per-field storage decisions, the PII spans detected at
+// ingestion, and any relationship edges to other records. It is what the
+// gate's Ingest hands the write seam after it has authorized, validated,
+// scanned, and classified the record.
+//
+// Relationships are the edges declared for this record at creation; the
+// writer persists them in the same tenant transaction as the record (see
+// EdgeInput), so the record and its edges commit atomically.
 type RecordInput struct {
-	Entity string
-	Fields []FieldInput
-	Spans  []SpanInput
+	Entity        string
+	Fields        []FieldInput
+	Spans         []SpanInput
+	Relationships []EdgeInput
 }
 
 // RecordWriter persists records. It is the write seam beneath the gate's
@@ -74,7 +83,26 @@ func (m *MemStore) Insert(_ context.Context, rec RecordInput) (string, error) {
 	for _, f := range rec.Fields {
 		fields[f.Name] = f.Value
 	}
-	m.Put(rec.Entity, Record{ID: id, Fields: fields})
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	// Referential integrity, mirroring the edges' foreign key: every target
+	// must already exist. Checking before storing anything keeps the record
+	// and its edges atomic — a bad edge leaves nothing behind.
+	for _, e := range rec.Relationships {
+		if !m.hasRecordLocked(e.TargetID) {
+			return "", fmt.Errorf("%w: target %s", ErrEdgeTargetNotFound, e.TargetID)
+		}
+	}
+	seq := m.putLocked(rec.Entity, Record{ID: id, Fields: fields})
+	for _, e := range rec.Relationships {
+		m.edges = append(m.edges, Edge{
+			Relationship: e.Relationship,
+			SourceID:     id,
+			SourceSeq:    seq,
+			TargetID:     e.TargetID,
+		})
+	}
 	return id, nil
 }
 
@@ -120,10 +148,35 @@ func (s *PostgresStore) Insert(ctx context.Context, rec RecordInput) (string, er
 				return err
 			}
 		}
+		// Edges are written in this same transaction, so the record and its
+		// edges commit together. The target's foreign key turns a reference
+		// to a missing record into a typed ErrEdgeTargetNotFound rather than
+		// a raw driver error, and rolls the whole insert back.
+		for _, e := range rec.Relationships {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO kura.record_edges
+				     (tenant_id, source_record_id, target_record_id, relationship)
+				 VALUES ($1, $2, $3, $4)`,
+				s.tenantID, id, e.TargetID, e.Relationship); err != nil {
+				return mapEdgeTargetErr(err, e.TargetID)
+			}
+		}
 		return nil
 	})
 	if err != nil {
 		return "", fmt.Errorf("data: inserting record: %w", err)
 	}
 	return id, nil
+}
+
+// mapEdgeTargetErr turns the database's reaction to an edge naming a missing
+// or malformed target into the typed ErrEdgeTargetNotFound: a foreign-key
+// violation (23503) means no such record, and an invalid-uuid (22P02) target
+// likewise cannot reference one. Any other error passes through unchanged.
+func mapEdgeTargetErr(err error, targetID string) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && (pgErr.Code == "23503" || pgErr.Code == "22P02") {
+		return fmt.Errorf("%w: target %s", ErrEdgeTargetNotFound, targetID)
+	}
+	return err
 }
