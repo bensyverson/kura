@@ -48,8 +48,34 @@ structured and feed the other surfaces.
 |---|---|---|
 | `name` | yes | Unique entity name. |
 | `description` | no | Human- and agent-readable summary. |
+| `append_only` | no | `true` makes the entity insert-only (see below). Defaults to `false`. |
 | `fields` | yes | The entity's attributes. At least one. |
 | `relationships` | no | Typed edges to other entities. |
+
+### Append-only entities
+
+```json
+{ "name": "ledger_entry", "append_only": true, "fields": [ ... ] }
+```
+
+An entity marked `append_only` stores **insert-only** records: they may be created
+but never updated or deleted. This is for event-like data — anything that should
+accrete an immutable history rather than be edited in place. An append-only entity
+may still declare relationships, and may be the target of other entities'
+relationships, so its records can be referenced like any other.
+
+The property is enforced on three layers, all driven by this one flag:
+
+- **The Cedar policy forbids it.** A policy that grants `update` or `delete` on an
+  append-only entity is rejected at validation, the default policy never emits those
+  grants, and the [policy viewer](policy) renders those cells as **N/A** rather than
+  empty — the immutability is legible, not merely unconfigured.
+- **The database enforces it.** A trigger raises a loud, specific error on any
+  `UPDATE` or `DELETE` of an append-only record, so the rule holds even against a
+  direct runtime database connection. See [Database](database#append-only-enforcement).
+- **Startup reconciles it.** The set of append-only entities is derived from the
+  manifest and applied at startup; tightening is automatic, loosening an entity that
+  already has stored records is refused without an explicit operator override.
 
 ## Fields
 

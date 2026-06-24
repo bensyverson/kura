@@ -151,15 +151,48 @@ superuser, both DSNs point at it.
 
 ## Row-level security
 
-Every tenant-scoped table — all three — has row-level security **enabled and forced**.
-Kura ships single-tenant, but RLS is far harder to retrofit than to start with, so it
-is on from day one.
+Every tenant-scoped table has row-level security **enabled and forced**. Kura ships
+single-tenant, but RLS is far harder to retrofit than to start with, so it is on from
+day one.
 
 Each policy keys on the `kura.tenant_id` session GUC. `current_setting('kura.tenant_id',
 true)` yields `NULL` when the GUC is unset, and `tenant_id = NULL` is never true — so a
 connection that never sets the GUC sees **nothing**. The policies fail closed by
 construction. `FORCE ROW LEVEL SECURITY` makes them bind the table owner too, so a
 provisioning path that queries as the owner is not silently exempt.
+
+## Append-only enforcement
+
+An entity the manifest marks [`append_only`](schema-manifest#append-only-entities)
+stores insert-only records. The rule is enforced mechanically, below the application,
+so it holds even against a direct `kura_api` connection:
+
+- **The set.** `kura.append_only_entities` holds one row per `(tenant, entity)` that is
+  frozen. It is tenant-scoped with forced RLS like every application table, **owned by
+  `kura_admin`**, and `kura_api` is granted nothing on it. The runtime role cannot
+  read or change what is frozen, so it cannot empty the set and bypass the control.
+- **The trigger.** A `BEFORE UPDATE OR DELETE` trigger on `kura.records` and
+  `kura.record_field_values` consults the set and raises a matchable error
+  (`entity "X" is append-only; UPDATE is not permitted`) when the row's entity is
+  frozen. A loud, specific trigger is chosen over a second RLS policy because it fails
+  with a named error and composes with the tenant-isolation policies rather than
+  competing with them. The guard function is `SECURITY DEFINER` owned by `kura_admin`,
+  so it reads the set with the owner's rights the invoking runtime role lacks. It reads
+  reliably under the set's forced RLS because a record can only be mutated on a
+  connection whose tenant GUC equals the row's tenant, and the trigger fires inside
+  that same transaction.
+- **Reconciliation.** At startup, on the elevated `kura_admin` connection, the set is
+  reconciled from the manifest. Adding protection applies automatically. **Removing**
+  protection from an entity that already has stored records is refused unless the
+  operator sets `KURA_APPEND_ONLY_ALLOW_LOOSEN` — so a boundary is never weakened as a
+  side effect of a manifest edit. Every change, and every refused loosening, is audited.
+
+The Cedar layer forbids `update`/`delete` grants on append-only entities independently
+(see [Authorization & policy](policy#append-only-entities)). The database trigger is
+complete protection on its own today; an additional application-layer check and the
+redaction-bypass distinction ride with the first mutation path Kura grows (there is
+none yet), and are deliberately deferred until then rather than shipped as untestable
+dead code.
 
 ## Encryption at rest
 
