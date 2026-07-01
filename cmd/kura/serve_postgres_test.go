@@ -59,7 +59,7 @@ func TestServeConfigSelectsPostgresStores(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = dsn
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
 
 	// The migrator/owner connection is a separate required credential. In
 	// production it is the kura_admin DSN; the test harness points both the
@@ -97,7 +97,7 @@ func TestServeConfigMigratesConfiguredDatabase(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = dsn
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
 	// Migrations run on the migrator/owner connection; in the test harness it
 	// targets the same fresh superuser database as the runtime connection.
 	env["KURA_ADMIN_DATABASE_URL"] = dsn
@@ -150,7 +150,7 @@ func TestServeConfigReconcilesAppendOnlySet(t *testing.T) {
 	env["KURA_KEYSTORE_DATABASE_URL"] = ksDSN
 	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = ksDSN
 	env["KURA_DB_TENANT_ID"] = tenant
-	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
 	env["KURA_MANIFEST_PATH"] = writeManifest(t, appendOnlyManifestJSON)
 
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {

@@ -24,6 +24,7 @@ import (
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
 	"github.com/bensyverson/kura/internal/review"
+	"github.com/bensyverson/kura/internal/secrets"
 	"github.com/bensyverson/kura/internal/server"
 	"github.com/bensyverson/kura/internal/storage"
 	"github.com/spf13/cobra"
@@ -130,10 +131,25 @@ Configuration is read from the environment:
   KURA_DB_TENANT_ID          tenant id the Postgres stores scope their
                              row-level security to (required when
                              KURA_DATABASE_URL is set)
-  KURA_RECORD_ENCRYPTION_KEY master KEK the record store wraps per-value
+  FIELD_ENCRYPTION_KEY       master KEK the record store wraps per-value
                              DEKs under: a base64-encoded 32-byte AES-256
-                             key (openssl rand -base64 32). Required when
+                             key (openssl rand -base64 32). Sourced from the
+                             secrets manager (Doppler in production, this
+                             process environment on the dev/bare path) under
+                             its canonical secret name, never read into the
+                             data path directly. Required when
                              KURA_DATABASE_URL is set
+  KURA_DOPPLER_TOKEN         Doppler service token. When set, secrets
+                             (FIELD_ENCRYPTION_KEY included) are read from
+                             Doppler over its HTTPS API rather than the
+                             process environment; KURA_DOPPLER_PROJECT and
+                             KURA_DOPPLER_CONFIG are then required to address
+                             the store. Injected at runtime by the deployment,
+                             never baked in
+  KURA_DOPPLER_PROJECT       Doppler project addressing the secret store
+                             (required when KURA_DOPPLER_TOKEN is set)
+  KURA_DOPPLER_CONFIG        Doppler config addressing the secret store
+                             (required when KURA_DOPPLER_TOKEN is set)
   KURA_ADMIN_DATABASE_URL    elevated migrator/owner DSN (TLS required; the
                              kura_admin role). Schema migrations and the
                              append-only set are administered on this
@@ -171,7 +187,7 @@ Configuration is read from the environment:
                              provisioned for this deployment
   KURA_BACKUP_ENCRYPTION_KEY high-entropy secret the backup dump is
                              encrypted under; distinct from
-                             KURA_RECORD_ENCRYPTION_KEY by design
+                             FIELD_ENCRYPTION_KEY by design
   KURA_MANIFEST_PATH         path to the schema manifest file. When set,
                              the gate enforces against it and the API grows
                              a data route per declared entity; an invalid
@@ -358,17 +374,32 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	}, nil
 }
 
+// buildSecretsBackend selects the secrets Backend from the environment.
+// With a Doppler service token configured (KURA_DOPPLER_TOKEN, plus its
+// project and config) it returns the DopplerBackend — the Standard-Regulated
+// managed secrets store — so every secret, the KEK included, is sourced from
+// the secrets manager. With no token it returns an EnvBackend reading secrets
+// from the process environment: the credential-less dev/bare counterpart,
+// parallel to the in-memory data store. Routing the KEK through this one seam
+// means the data path never reads it from a bare env var directly.
+func buildSecretsBackend(getenv func(string) string) (secrets.Backend, error) {
+	if token := getenv("KURA_DOPPLER_TOKEN"); token != "" {
+		return secrets.NewDopplerBackend(token, getenv("KURA_DOPPLER_PROJECT"), getenv("KURA_DOPPLER_CONFIG"))
+	}
+	return secrets.NewEnvBackend(getenv), nil
+}
+
 // buildStores selects the record and user stores from the environment.
 // With KURA_DATABASE_URL set it opens the configured Postgres database,
 // runs any pending migrations against it, and returns the Postgres-backed
-// stores plus the open pool; the companion KURA_DB_TENANT_ID and
-// KURA_RECORD_ENCRYPTION_KEY are then required, and a non-TLS DSN is
-// refused. With no database URL it returns the in-memory stores and a nil
-// pool — the credential-less dev/bare path — so a server with no DB
-// configured behaves exactly as before. All stores share one pool: the
-// user store resolves roles for the gate and the jobs ledger persists work
-// against the same database, so a single connection serves enforcement,
-// management, and the async ledger alike.
+// stores plus the open pool; the companion KURA_DB_TENANT_ID is then
+// required, the master KEK is sourced from the secrets backend, and a
+// non-TLS DSN is refused. With no database URL it returns the in-memory
+// stores and a nil pool — the credential-less dev/bare path — so a server
+// with no DB configured behaves exactly as before. All stores share one
+// pool: the user store resolves roles for the gate and the jobs ledger
+// persists work against the same database, so a single connection serves
+// enforcement, management, and the async ledger alike.
 func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWriter, data.UserStore, *sql.DB, error) {
 	dsn := getenv("KURA_DATABASE_URL")
 	if dsn == "" {
@@ -386,18 +417,25 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	// The master KEK wraps every per-value DEK. It is a base64-encoded
-	// 32-byte AES-256 key (openssl rand -base64 32); the data layer receives
-	// only the wrap/unwrap capability, never the raw key, keeping the KEK's
-	// blast radius small. A missing or malformed KEK is a fail-fast startup
-	// error, not a silent weakening of encryption.
-	kekEncoded, err := required("KURA_RECORD_ENCRYPTION_KEY")
+	// The master KEK wraps every per-value DEK. It is sourced from the secrets
+	// manager under secrets.EncryptionKeyName (Doppler in production, the
+	// process environment on the dev/bare path) — never a bare env read in the
+	// data path. It is a base64-encoded 32-byte AES-256 key (openssl rand
+	// -base64 32); the data layer receives only the wrap/unwrap capability,
+	// never the raw key, keeping the KEK's blast radius small. A missing or
+	// malformed KEK is a fail-fast startup error, not a silent weakening of
+	// encryption.
+	backend, err := buildSecretsBackend(getenv)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	kekEncoded, err := backend.Fetch(context.Background(), secrets.EncryptionKeyName)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("serve: sourcing %s from the secrets manager: %w", secrets.EncryptionKeyName, err)
+	}
 	wrapper, err := crypto.NewKeyWrapperFromBase64(kekEncoded)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("serve: KURA_RECORD_ENCRYPTION_KEY: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("serve: %s: %w", secrets.EncryptionKeyName, err)
 	}
 	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
 	if err != nil {
@@ -568,7 +606,7 @@ func buildJobsManager(pool *sql.DB, tenantID string, svc *backup.Service) (*jobs
 // The Service is assembled from a PGDumper, the append-only DO Spaces
 // backups Store, the backup-encryption key derived from
 // KURA_BACKUP_ENCRYPTION_KEY (distinct from the runtime
-// KURA_RECORD_ENCRYPTION_KEY), the recorder, and the database DSN it
+// FIELD_ENCRYPTION_KEY), the recorder, and the database DSN it
 // dumps. buildJobsManager registers it automatically.
 func buildBackupService(getenv func(string) string, recorder *audit.Recorder) (*backup.Service, error) {
 	endpoint := getenv("KURA_DO_SPACES_ENDPOINT")
