@@ -14,51 +14,41 @@ type ExtensionStatus struct {
 	Installed bool // present in pg_extension — already created in this database
 }
 
-// ExtensionReport is the result of VerifyExtensions: the status of the two
-// extensions Kura's database layer requires — pgcrypto for field-level
-// encryption, pgaudit for forensic query logging.
+// ExtensionReport is the result of VerifyExtensions: the status of the
+// extension Kura's database layer requires — pgaudit for forensic query
+// logging. Field-level encryption no longer needs a database extension: it
+// runs in the application layer (internal/crypto), so pgcrypto is gone (see
+// migration 0010).
 type ExtensionReport struct {
-	Pgcrypto ExtensionStatus
-	Pgaudit  ExtensionStatus
+	Pgaudit ExtensionStatus
 }
 
-// OK reports whether the extension requirements are met. pgcrypto must be
-// installed — migration 0001 creates it, and field-level encryption cannot
-// work without it. pgaudit need only be available: whether it actually
-// loads depends on the server's shared_preload_libraries, a deployment
-// setting outside any migration's reach.
+// OK reports whether the extension requirements are met. pgaudit need only
+// be available: whether it actually loads depends on the server's
+// shared_preload_libraries, a deployment setting outside any migration's
+// reach.
 func (r ExtensionReport) OK() bool {
-	return r.Pgcrypto.Available && r.Pgcrypto.Installed && r.Pgaudit.Available
+	return r.Pgaudit.Available
 }
 
 // Blocker returns a human-readable description of the unmet extension
 // requirement, or "" when OK. It is how the database layer surfaces a
 // pgaudit gap rather than letting it pass silently.
 func (r ExtensionReport) Blocker() string {
-	switch {
-	case !r.Pgcrypto.Available:
-		return "pgcrypto is not available on this Postgres server; field-level encryption cannot function"
-	case !r.Pgcrypto.Installed:
-		return "pgcrypto is available but not installed; migration 0001 should have created it"
-	case !r.Pgaudit.Available:
+	if !r.Pgaudit.Available {
 		return "pgaudit is not available on this Postgres server; forensic query logging cannot be enabled — the deployment's Postgres image or managed-database version must provide it"
-	default:
-		return ""
 	}
+	return ""
 }
 
 // VerifyExtensions inspects the server and reports the availability and
-// installed state of pgcrypto and pgaudit.
+// installed state of pgaudit.
 func VerifyExtensions(ctx context.Context, db *sql.DB) (ExtensionReport, error) {
-	pgcrypto, err := extensionStatus(ctx, db, "pgcrypto")
-	if err != nil {
-		return ExtensionReport{}, err
-	}
 	pgaudit, err := extensionStatus(ctx, db, "pgaudit")
 	if err != nil {
 		return ExtensionReport{}, err
 	}
-	return ExtensionReport{Pgcrypto: pgcrypto, Pgaudit: pgaudit}, nil
+	return ExtensionReport{Pgaudit: pgaudit}, nil
 }
 
 func extensionStatus(ctx context.Context, db *sql.DB, name string) (ExtensionStatus, error) {

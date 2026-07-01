@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -39,12 +40,18 @@ type Record struct {
 	ID     string
 	Seq    int64
 	Fields map[string]string
+	// Erased names the fields whose per-value DEK has been crypto-shredded.
+	// Such a field is absent from Fields — its value is permanently
+	// unrecoverable by design — but the record still reports it here, so a
+	// reader sees that the field existed and was erased rather than that it
+	// was never set. Nil for a record with nothing erased.
+	Erased []string
 }
 
 // clone returns a deep copy of r, so a record handed out by a store can
 // be mutated by the caller without corrupting the stored copy.
 func (r Record) clone() Record {
-	return Record{ID: r.ID, Seq: r.Seq, Fields: maps.Clone(r.Fields)}
+	return Record{ID: r.ID, Seq: r.Seq, Fields: maps.Clone(r.Fields), Erased: slices.Clone(r.Erased)}
 }
 
 // RecordStore reads stored records. It is the seam the gate's data-read

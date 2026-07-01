@@ -42,7 +42,7 @@ It provisions, in doc 03's dependency order:
 | --- | --- |
 | **VPC + Cloud Firewall** | Private network for everything; inbound **443 only**, **no public SSH** — administrative access is [Tailscale](#administrative-access)-only |
 | **Spaces × 2** (`backups`, `audit-log`) | Private, versioned, lifecycle retention (35 d / 730 d), and a **deny-delete bucket policy** administered from the admin credential domain — the "suspenders" to the Go [`AppendOnly` role](storage)'s "belt" |
-| **Managed Postgres** | On the VPC; a **database firewall** admits only the tagged droplets, so there is no public access; TLS-only; pgaudit/pgcrypto |
+| **Managed Postgres** | On the VPC; a **database firewall** admits only the tagged droplets, so there is no public access; TLS-only; pgaudit |
 | **Droplets × 2** (PII, API) | Tagged into the VPC; join the tailnet via cloud-init; the PII detector is stood up first because the API depends on it |
 
 ### Administrative access

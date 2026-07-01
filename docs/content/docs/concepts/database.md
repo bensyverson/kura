@@ -17,7 +17,7 @@ never changes when a client's manifest does.
 | Table | Holds |
 |---|---|
 | `kura.records` | One row per record. `entity` is a free-text discriminator; `seq` is the record's order key (see [Record ordering](#record-ordering-a-shared-sequence)). |
-| `kura.record_field_values` | One row per (record, field). A value is either a plain scalar or pgcrypto ciphertext — never both. |
+| `kura.record_field_values` | One row per (record, field). A value is either a plain scalar (`value_text`) or app-layer AES-256-GCM ciphertext (`value_encrypted`) — never both. |
 | `kura.pii_spans` | Detected-PII metadata (category, byte offset, length, confidence) produced at ingestion. The source text never lives here. |
 | `kura.record_edges` | One row per relationship edge between two records. Both endpoints are foreign keys into `kura.records` (see [Relationships](#relationships-typed-edges)). |
 | `kura.users` | The authorized-user list — one row per email allowed to hold a principal in this deployment. |
@@ -91,12 +91,9 @@ RLS **enabled and forced** from creation, keyed on the `kura.tenant_id` GUC.
 
 ## Required extensions
 
-Two Postgres extensions are required, and `internal/db.VerifyExtensions` reports the
-state of both:
+One Postgres extension is required, and `internal/db.VerifyExtensions` reports its
+state:
 
-- **pgcrypto** — supplies the field-level encryption primitives (`pgp_sym_encrypt` /
-  `pgp_sym_decrypt`). Migration `0001` creates it; it is verified available and
-  installed.
 - **pgaudit** — forensic query logging. pgaudit is intentionally **not** created by a
   migration: it only functions when it is present in the server's
   `shared_preload_libraries`, which is a deployment-time setting no migration can
@@ -197,17 +194,24 @@ dead code.
 ## Encryption at rest
 
 Field values are stored in `record_field_values` as either a plain scalar
-(`value_text`) or pgcrypto ciphertext (`value_encrypted`) — a `CHECK` constraint
-enforces exactly one. Two kinds of value are always encrypted:
+(`value_text`) or ciphertext (`value_encrypted`) — a `CHECK` constraint enforces
+exactly one. Two kinds of value are encrypted:
 
 - **High-sensitivity categories** — account numbers, government IDs, medical record
   numbers, biometrics, secrets — get field-level encryption.
-- **Free-text columns** are encrypted at the column level by default, since free text
-  is assumed to contain PII.
+- **Free-text columns** are encrypted by default, since free text is assumed to
+  contain PII.
 
-Encryption uses `internal/db.EncryptValue` / `DecryptValue`, wrapping pgcrypto under
-an **app-managed key** supplied by the secrets manager. The key is never written to
-the database, and a wrong key fails loudly rather than returning garbage.
+Encryption is **application-layer**, not in-database. Each encrypted value is sealed
+in Go with AES-256-GCM (`internal/crypto`) under its own per-value data-encryption key
+(DEK); the DEK is wrapped under a master KEK and held in a physically separate,
+erasable key store (`internal/keystore`), never beside the ciphertext. This is what
+makes erasure a **crypto-shred** — destroy the key, and the ciphertext is permanently
+opaque in every copy including immutable backups, without mutating the record. See
+[ADR 0002](https://github.com/bensyverson/kura/blob/main/docs/decisions/0002-erasable-key-store-for-field-encryption.md)
+for the design; pgcrypto was dropped (migration `0010`) once crypto moved to the
+application. A value whose DEK has been shredded reads back as *erased*, not as
+ciphertext or an error.
 
 ## Reading records: the RecordStore
 
@@ -228,9 +232,11 @@ Two implementations satisfy the interface:
     `kura.tenant_id` GUC (transaction-local, so it cannot leak across a pooled
     connection), so the row-level-security policies bind. A store scoped to one tenant
     cannot see another's rows.
-  - **Field decryption.** A field stored as `value_encrypted` is decrypted with the
-    app-managed key as part of the read query. The store hands back plaintext; the
-    bytes at rest stay ciphertext.
+  - **Field decryption.** A field stored as `value_encrypted` is decrypted in Go:
+    the store fetches and unwraps the value's DEK through the key-store cache and
+    runs AES-256-GCM. The store hands back plaintext; the bytes at rest stay
+    ciphertext. A field whose DEK was shredded is returned as *erased* rather than
+    decrypted.
 
   `PostgresStore` connects as the RLS-bound `kura_api` role — never a superuser — so
   the tenant-isolation guarantee is real and not an accident of which role ran the

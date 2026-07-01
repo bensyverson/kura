@@ -77,10 +77,8 @@ func TestMemStoreAssignsRecordSeq(t *testing.T) {
 // Get and List, satisfying the same contract the fake does.
 func TestPostgresStoreAssignsRecordSeq(t *testing.T) {
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 	assertRecordSeqContract(t, store, store)
 }

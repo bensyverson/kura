@@ -13,11 +13,13 @@ import (
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/backup"
 	"github.com/bensyverson/kura/internal/cedar"
+	"github.com/bensyverson/kura/internal/crypto"
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/db"
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/jobs"
+	"github.com/bensyverson/kura/internal/keystore"
 	"github.com/bensyverson/kura/internal/llm"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
@@ -36,6 +38,13 @@ const oidcDiscoveryTimeout = 15 * time.Second
 // serveConfig when KURA_DATABASE_URL is set. An unreachable database must
 // fail the operator's startup quickly, not hang.
 const dbStartupTimeout = 30 * time.Second
+
+// keystoreCacheCapacity bounds the in-process LRU of unwrapped DEKs the
+// record store reads through. It trades a fixed amount of memory for
+// avoiding a key-store round-trip and an unwrap on hot reads; the cache
+// honours crypto-shred eviction, so a bounded stale window is never a
+// correctness risk.
+const keystoreCacheCapacity = 4096
 
 // defaultServeAddr binds loopback only. Caddy terminates TLS in front of
 // the server and proxies to it on the same host (Phase 6), so the server
@@ -121,15 +130,25 @@ Configuration is read from the environment:
   KURA_DB_TENANT_ID          tenant id the Postgres stores scope their
                              row-level security to (required when
                              KURA_DATABASE_URL is set)
-  KURA_RECORD_ENCRYPTION_KEY app-managed key the Postgres record store
-                             decrypts encrypted fields with (required when
-                             KURA_DATABASE_URL is set)
+  KURA_RECORD_ENCRYPTION_KEY master KEK the record store wraps per-value
+                             DEKs under: a base64-encoded 32-byte AES-256
+                             key (openssl rand -base64 32). Required when
+                             KURA_DATABASE_URL is set
   KURA_ADMIN_DATABASE_URL    elevated migrator/owner DSN (TLS required; the
                              kura_admin role). Schema migrations and the
                              append-only set are administered on this
                              connection — never the runtime kura_api
                              connection — so the runtime role cannot own
                              schema objects or write the append-only set.
+                             Required when KURA_DATABASE_URL is set
+  KURA_KEYSTORE_DATABASE_URL runtime DSN of the separate, erasable key-store
+                             instance that holds wrapped DEKs (ADR 0002). A
+                             physically distinct instance so crypto-shredding
+                             can destroy keys the immutable backup never
+                             captured. Required when KURA_DATABASE_URL is set
+  KURA_KEYSTORE_ADMIN_DATABASE_URL
+                             elevated migrator DSN for the key-store instance;
+                             its schema lineage is applied here at startup.
                              Required when KURA_DATABASE_URL is set
   KURA_APPEND_ONLY_ALLOW_LOOSEN
                              set truthy to permit removing append-only
@@ -359,11 +378,33 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	encKey, err := required("KURA_RECORD_ENCRYPTION_KEY")
+	// The master KEK wraps every per-value DEK. It is a base64-encoded
+	// 32-byte AES-256 key (openssl rand -base64 32); the data layer receives
+	// only the wrap/unwrap capability, never the raw key, keeping the KEK's
+	// blast radius small. A missing or malformed KEK is a fail-fast startup
+	// error, not a silent weakening of encryption.
+	kekEncoded, err := required("KURA_RECORD_ENCRYPTION_KEY")
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	wrapper, err := crypto.NewKeyWrapperFromBase64(kekEncoded)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("serve: KURA_RECORD_ENCRYPTION_KEY: %w", err)
+	}
 	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	// The key store is a physically separate, erasable Postgres instance
+	// (ADR 0002), so it has its own runtime and migrator DSNs. Requiring them
+	// whenever KURA_DATABASE_URL is set means a data deployment can never come
+	// up with encryption half-wired — a store that could seal values it could
+	// never erase.
+	keystoreDSN, err := required("KURA_KEYSTORE_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	keystoreAdminDSN, err := required("KURA_KEYSTORE_ADMIN_DATABASE_URL")
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
@@ -397,8 +438,44 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	}
 	adminPool.Close()
 
-	pg, err := data.NewPostgresStore(pool, tenantID, encKey)
+	// The key store is a distinct instance: migrate its own lineage on its
+	// own migrator connection, then open the runtime pool the cache reads
+	// through. Its lineage is numbered independently of the main schema, so
+	// it keeps its own schema_migrations — pointing Migrate and MigrateKeystore
+	// at the same database would collide the version sequences.
+	keystoreAdminPool, err := db.Open(keystoreAdminDSN)
 	if err != nil {
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening key-store migrator database: %w", err)
+	}
+	ksCtx, ksCancel := context.WithTimeout(context.Background(), dbStartupTimeout)
+	defer ksCancel()
+	if err := db.MigrateKeystore(ksCtx, keystoreAdminPool); err != nil {
+		keystoreAdminPool.Close()
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: running key-store migrations: %w", err)
+	}
+	keystoreAdminPool.Close()
+
+	keystorePool, err := db.Open(keystoreDSN)
+	if err != nil {
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening key-store database: %w", err)
+	}
+	ksStore, err := keystore.NewPostgresStore(keystorePool)
+	if err != nil {
+		keystorePool.Close()
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: building key store: %w", err)
+	}
+	// The cache fronts the key store on the read path, unwrapping DEKs with
+	// the KEK and honouring crypto-shred eviction. The record store writes
+	// wrapped DEKs straight through ksStore and reads through the cache.
+	dekCache := keystore.NewCache(ksStore, wrapper, keystoreCacheCapacity)
+
+	pg, err := data.NewPostgresStore(pool, tenantID, ksStore, wrapper, dekCache)
+	if err != nil {
+		keystorePool.Close()
 		pool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: building record store: %w", err)
 	}

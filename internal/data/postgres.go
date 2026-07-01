@@ -5,12 +5,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/bensyverson/kura/internal/crypto"
+	"github.com/bensyverson/kura/internal/keystore"
 )
 
 // ErrMissingDependency is returned by a Postgres store constructor when
 // a required collaborator is missing. A store that cannot read or write
-// safely — no pool, or no tenant to scope RLS to — must not come into
-// existence.
+// safely — no pool, no tenant to scope RLS to, or no key material to
+// encrypt with — must not come into existence.
 var ErrMissingDependency = errors.New("data: postgres store is missing a required dependency")
 
 // PostgresStore is the production RecordStore: it assembles records from
@@ -24,27 +27,40 @@ var ErrMissingDependency = errors.New("data: postgres store is missing a require
 //     store scoped to one tenant cannot see another's rows, even though
 //     the table is physically shared.
 //
-//   - Field decryption. A field stored encrypted (value_encrypted, for
-//     high-sensitivity and free-text values) is decrypted with the
-//     app-managed key as part of the read query. The store hands back
-//     plaintext; the bytes at rest stay ciphertext.
+//   - Field encryption. An encrypted field's value is sealed in Go with a
+//     per-value DEK (crypto.Encrypt), the DEK wrapped under the master KEK
+//     and persisted to the separate key store; the ciphertext bytes land in
+//     value_encrypted. Reads reverse it: fetch and unwrap the DEK through
+//     the cache, decrypt in Go. Per ADR 0002 the DEK lives in a physically
+//     separate, erasable instance, so crypto runs in the application, never
+//     as a SQL expression. A value whose DEK was shredded reads back as
+//     erased (named in Record.Erased), never as ciphertext or an error.
 type PostgresStore struct {
 	db       *sql.DB
 	tenantID string
-	encKey   string
+	// keys persists wrapped DEKs on write; wrapper seals a fresh DEK under
+	// the master KEK; cache fronts the key store on read, unwrapping DEKs
+	// and honouring crypto-shred eviction. Writes go through keys+wrapper,
+	// reads through cache (which reads the same store), so a value written
+	// here reads back through the cache.
+	keys    keystore.KeyStore
+	wrapper crypto.Wrapper
+	cache   *keystore.Cache
 }
 
 var _ RecordStore = (*PostgresStore)(nil)
 
-// NewPostgresStore returns a PostgresStore reading db, scoped to
-// tenantID, decrypting with encryptionKey. The pool should be connected
-// as the RLS-bound kura_api role; the tenant id and key come from
-// deployment configuration and the secrets manager.
-func NewPostgresStore(db *sql.DB, tenantID, encryptionKey string) (*PostgresStore, error) {
-	if db == nil || tenantID == "" || encryptionKey == "" {
+// NewPostgresStore returns a PostgresStore reading db, scoped to tenantID,
+// encrypting field values under per-value DEKs. The pool should be
+// connected as the RLS-bound kura_api role; the tenant id comes from
+// deployment configuration. keys is the wrapped-DEK store, wrapper the KEK
+// wrap capability (its blast radius kept small — the store never holds the
+// raw KEK), and cache the read-side unwrapping cache over the same store.
+func NewPostgresStore(db *sql.DB, tenantID string, keys keystore.KeyStore, wrapper crypto.Wrapper, cache *keystore.Cache) (*PostgresStore, error) {
+	if db == nil || tenantID == "" || keys == nil || wrapper == nil || cache == nil {
 		return nil, ErrMissingDependency
 	}
-	return &PostgresStore{db: db, tenantID: tenantID, encKey: encryptionKey}, nil
+	return &PostgresStore{db: db, tenantID: tenantID, keys: keys, wrapper: wrapper, cache: cache}, nil
 }
 
 // Get returns the record with the given id under entity. A missing
@@ -70,11 +86,11 @@ func (s *PostgresStore) Get(ctx context.Context, entity, id string) (Record, boo
 			return err
 		}
 		found = true
-		fields, err := s.fieldsOf(ctx, tx, id)
+		fields, erased, err := s.fieldsOf(ctx, tx, id)
 		if err != nil {
 			return err
 		}
-		rec = Record{ID: id, Seq: seq, Fields: fields}
+		rec = Record{ID: id, Seq: seq, Fields: fields, Erased: erased}
 		return nil
 	})
 	if err != nil {
@@ -117,11 +133,11 @@ func (s *PostgresStore) List(ctx context.Context, entity string, limit, offset i
 		rows.Close()
 
 		for _, k := range keys {
-			fields, err := s.fieldsOf(ctx, tx, k.id)
+			fields, erased, err := s.fieldsOf(ctx, tx, k.id)
 			if err != nil {
 				return err
 			}
-			out = append(out, Record{ID: k.id, Seq: k.seq, Fields: fields})
+			out = append(out, Record{ID: k.id, Seq: k.seq, Fields: fields, Erased: erased})
 		}
 		return nil
 	})
@@ -198,34 +214,78 @@ func (s *PostgresStore) queryEdges(ctx context.Context, query, arg string) ([]Ed
 	return out, nil
 }
 
-// fieldsOf reads one record's field values, decrypting any that were
-// stored encrypted. A record with no field rows yields an empty,
-// non-nil map.
-func (s *PostgresStore) fieldsOf(ctx context.Context, tx *sql.Tx, recordID string) (map[string]string, error) {
+// fieldsOf reads one record's field values, decrypting any stored
+// encrypted with their per-value DEK. Plaintext (structural) fields come
+// straight from value_text. For an encrypted field it fetches the DEK
+// through the cache, unwraps it, and decrypts in Go.
+//
+// A field whose DEK has been crypto-shredded is not an error and not
+// ciphertext: it is reported as erased — its name added to the returned
+// erased list and omitted from fields — so a read of a partially erased
+// record stays a normal, non-failing operation. A genuine authentication
+// failure (tampering or a wrong KEK) stays a hard error, distinct from an
+// erased value. A record with no field rows yields an empty, non-nil map
+// and a nil erased list.
+func (s *PostgresStore) fieldsOf(ctx context.Context, tx *sql.Tx, recordID string) (map[string]string, []string, error) {
 	rows, err := tx.QueryContext(ctx,
-		`SELECT field_name,
-		        CASE WHEN value_encrypted IS NULL
-		             THEN value_text
-		             ELSE pgp_sym_decrypt(value_encrypted, $2) END
+		`SELECT field_name, value_text, value_encrypted
 		 FROM kura.record_field_values WHERE record_id = $1`,
-		recordID, s.encKey)
+		recordID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer rows.Close()
 
+	type encField struct {
+		name       string
+		ciphertext []byte
+	}
 	fields := make(map[string]string)
+	var encrypted []encField
 	for rows.Next() {
-		var name, value string
-		if err := rows.Scan(&name, &value); err != nil {
-			return nil, err
+		var name string
+		var text sql.NullString
+		var ciphertext []byte
+		if err := rows.Scan(&name, &text, &ciphertext); err != nil {
+			return nil, nil, err
 		}
-		fields[name] = value
+		// exactly_one_value guarantees precisely one of value_text /
+		// value_encrypted is non-NULL, so a NULL text is an encrypted field.
+		if ciphertext == nil {
+			fields[name] = text.String
+			continue
+		}
+		encrypted = append(encrypted, encField{name: name, ciphertext: ciphertext})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return fields, nil
+
+	var erased []string
+	for _, ef := range encrypted {
+		dek, found, err := s.cache.Unwrapped(ctx, keystore.Key{
+			TenantID:  s.tenantID,
+			RecordID:  recordID,
+			FieldName: ef.name,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("data: unwrapping DEK for %q: %w", ef.name, err)
+		}
+		if !found {
+			// The DEK is gone — crypto-shredded. The ciphertext is
+			// permanently opaque by design; report the field as erased.
+			erased = append(erased, ef.name)
+			continue
+		}
+		plaintext, err := crypto.Decrypt(dek, ef.ciphertext)
+		if err != nil {
+			// A present DEK that cannot open the value means tampered
+			// ciphertext or a wrong KEK — a hard error, never a silent miss.
+			return nil, nil, fmt.Errorf("data: decrypting %q: %w", ef.name, err)
+		}
+		fields[ef.name] = string(plaintext)
+	}
+	return fields, erased, nil
 }
 
 // inTenantTx runs fn inside a read-only transaction scoped to the

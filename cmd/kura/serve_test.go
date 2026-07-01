@@ -40,6 +40,11 @@ const oneEntityManifest = `{
   ]
 }`
 
+// testKEK is a valid base64-encoded 32-byte master KEK for tests that
+// exercise the Postgres path (KURA_RECORD_ENCRYPTION_KEY must now decode to
+// an AES-256 key). It is the base64 of "0123456789abcdef0123456789abcdef".
+const testKEK = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+
 // serveEnv is a complete set of the environment variables serveConfig
 // requires, for tests to start from and then perturb. It includes the
 // optional LLM-gateway variables so the baseline produces a working
@@ -143,7 +148,7 @@ func TestServeConfigDefaultsToInMemoryStores(t *testing.T) {
 func TestServeConfigDatabaseURLRequiresTenantID(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
 	delete(env, "KURA_DB_TENANT_ID")
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
@@ -178,11 +183,52 @@ func TestServeConfigRejectsInsecureDatabaseURL(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=disable"
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
 	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_KEYSTORE_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
 		t.Fatal("serveConfig accepted a non-TLS KURA_DATABASE_URL")
+	}
+}
+
+// With KURA_DATABASE_URL set, the key-store DSN is required: the wrapped
+// DEKs live in a physically separate instance (ADR 0002), so a deployment
+// that configures a data database but no key store cannot seal or erase
+// values and must fail startup loudly rather than come up half-wired.
+func TestServeConfigDatabaseURLRequiresKeystoreURL(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	delete(env, "KURA_KEYSTORE_DATABASE_URL")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_KEYSTORE_DATABASE_URL")
+	}
+	if !strings.Contains(err.Error(), "KURA_KEYSTORE_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// A malformed master KEK — not base64, or not 32 bytes — is a fail-fast
+// startup error, never a silent weakening of encryption.
+func TestServeConfigRejectsMalformedKEK(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = "not-a-32-byte-base64-key"
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_KEYSTORE_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted a malformed KURA_RECORD_ENCRYPTION_KEY")
+	}
+	if !strings.Contains(err.Error(), "KURA_RECORD_ENCRYPTION_KEY") {
+		t.Errorf("error %q does not name KURA_RECORD_ENCRYPTION_KEY", err)
 	}
 }
 
@@ -195,7 +241,7 @@ func TestServeConfigDatabaseURLRequiresAdminURL(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["KURA_RECORD_ENCRYPTION_KEY"] = testKEK
 	delete(env, "KURA_ADMIN_DATABASE_URL")
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {

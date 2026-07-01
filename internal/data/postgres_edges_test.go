@@ -12,11 +12,9 @@ import (
 // by source.
 func TestPostgresStoreEdgesHappyPath(t *testing.T) {
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 	assertEdgeHappyPath(t, store, store)
 }
 
@@ -26,15 +24,13 @@ func TestPostgresStoreEdgesHappyPath(t *testing.T) {
 func TestPostgresStoreInsertEdgeToMissingTargetIsRejected(t *testing.T) {
 	ctx := context.Background()
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 
 	// A syntactically valid uuid that was never inserted.
 	const missing = "00000000-0000-0000-0000-000000000000"
-	_, err = store.Insert(ctx, RecordInput{
+	_, err := store.Insert(ctx, RecordInput{
 		Entity:        "event",
 		Fields:        []FieldInput{{Name: "label", Type: "string", Value: "orphan"}},
 		Relationships: []EdgeInput{{Relationship: "about", TargetID: missing}},
@@ -53,16 +49,11 @@ func TestPostgresStoreEdgesAreTenantIsolated(t *testing.T) {
 	ctx := context.Background()
 	env := newDataTestEnv(t)
 	pool := connectAsAPIRole(t, env)
+	ce := newCryptoEnv(t)
 	tenantA := newTenantID(t, env)
 	tenantB := newTenantID(t, env)
-	storeA, err := NewPostgresStore(pool, tenantA, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore A: %v", err)
-	}
-	storeB, err := NewPostgresStore(pool, tenantB, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore B: %v", err)
-	}
+	storeA := newRecordStore(t, pool, tenantA, ce)
+	storeB := newRecordStore(t, pool, tenantB, ce)
 
 	subject, err := storeA.Insert(ctx, RecordInput{
 		Entity: "subject",

@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bensyverson/kura/internal/crypto"
 	"github.com/bensyverson/kura/internal/db"
+	"github.com/bensyverson/kura/internal/keystore"
 )
 
 // testEnv is one integration test's isolated slice of the test cluster:
@@ -137,12 +139,74 @@ func newTenantID(t *testing.T, env testEnv) string {
 	return id
 }
 
-// seedRecord inserts one record and its field values under tenantID,
-// via the superuser pool (which bypasses RLS). plain fields land in
-// value_text; encrypted fields are pgp_sym_encrypt'd under key into
-// value_encrypted, exactly as the ingestion path will store them. It
-// returns the new record's id.
-func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encrypted map[string]string, key string) string {
+// cryptoEnv bundles the app-layer envelope collaborators a record store
+// needs: an in-memory key store (the Fake), the master-KEK wrap capability,
+// and the read-side unwrapping cache over that store. One cryptoEnv per
+// test gives seedRecord and the store under test a shared key store, so a
+// value sealed by the seeder reads back through the store's cache.
+type cryptoEnv struct {
+	Keys    *keystore.Fake
+	Wrapper crypto.Wrapper
+	Cache   *keystore.Cache
+}
+
+// newCryptoEnv builds a cryptoEnv over a fixed 32-byte test KEK. The Fake
+// key store and the cache stay in memory — the key store is a separate
+// concern from the record database, so integration tests exercise the real
+// main-DB read/write paths against a fake key store without provisioning a
+// second cluster (the Postgres key store has its own integration tests).
+func newCryptoEnv(t *testing.T) *cryptoEnv {
+	t.Helper()
+	w, err := crypto.NewKeyWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewKeyWrapper: %v", err)
+	}
+	keys := keystore.NewFake()
+	return &cryptoEnv{Keys: keys, Wrapper: w, Cache: keystore.NewCache(keys, w, 128)}
+}
+
+// seal encrypts value under a fresh per-value DEK and stores the wrapped
+// DEK, mirroring the write path's sealField. It returns the ciphertext the
+// seeder writes into value_encrypted.
+func (ce *cryptoEnv) seal(t *testing.T, tenantID, recordID, field, value string) []byte {
+	t.Helper()
+	dek, err := crypto.GenerateDEK()
+	if err != nil {
+		t.Fatalf("GenerateDEK: %v", err)
+	}
+	ciphertext, err := crypto.Encrypt(dek, []byte(value))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	wrapped, err := ce.Wrapper.Wrap(dek)
+	if err != nil {
+		t.Fatalf("Wrap: %v", err)
+	}
+	if err := ce.Keys.Store(context.Background(), keystore.Key{
+		TenantID: tenantID, RecordID: recordID, FieldName: field,
+	}, wrapped); err != nil {
+		t.Fatalf("keystore Store: %v", err)
+	}
+	return ciphertext
+}
+
+// newRecordStore builds a PostgresStore over pool, scoped to tenant, with
+// ce's crypto collaborators. It fails the test on a construction error.
+func newRecordStore(t *testing.T, pool *sql.DB, tenant string, ce *cryptoEnv) *PostgresStore {
+	t.Helper()
+	s, err := NewPostgresStore(pool, tenant, ce.Keys, ce.Wrapper, ce.Cache)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+	return s
+}
+
+// seedRecord inserts one record and its field values under tenantID, via
+// the superuser pool (which bypasses RLS). plain fields land in value_text;
+// encrypted fields are sealed app-layer under a per-value DEK (see
+// cryptoEnv.seal) into value_encrypted, exactly as the ingestion path
+// stores them. It returns the new record's id.
+func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encrypted map[string]string, ce *cryptoEnv) string {
 	t.Helper()
 	var id string
 	err := env.DB.QueryRow(
@@ -160,10 +224,11 @@ func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encry
 		}
 	}
 	for name, val := range encrypted {
+		ciphertext := ce.seal(t, tenantID, id, name, val)
 		if _, err := env.DB.Exec(
 			`INSERT INTO kura.record_field_values (record_id, tenant_id, field_name, field_type, value_encrypted)
-			 VALUES ($1, $2, $3, 'text', pgp_sym_encrypt($4, $5))`,
-			id, tenantID, name, val, key); err != nil {
+			 VALUES ($1, $2, $3, 'text', $4)`,
+			id, tenantID, name, ciphertext); err != nil {
 			t.Fatalf("inserting encrypted field %q: %v", name, err)
 		}
 	}
