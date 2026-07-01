@@ -49,7 +49,7 @@ func TestCacheHitAvoidsStoreAndUnwrap(t *testing.T) {
 	ctx := context.Background()
 	store, unwrap, cache := newCacheEnv(t, 8)
 	k := key("t1", "r1", "email")
-	must(t, store.Store(ctx, k, []byte("wrapped")))
+	must(t, store.Store(ctx, k, []byte("wrapped"), 1))
 
 	first, found, err := cache.Unwrapped(ctx, k)
 	if err != nil || !found {
@@ -86,7 +86,7 @@ func TestCacheShredInvalidatesAndDelegates(t *testing.T) {
 	ctx := context.Background()
 	store, _, cache := newCacheEnv(t, 8)
 	k := key("t1", "r1", "email")
-	must(t, store.Store(ctx, k, []byte("wrapped")))
+	must(t, store.Store(ctx, k, []byte("wrapped"), 1))
 
 	// Warm the cache so the DEK is hot before erasure.
 	if _, found, _ := cache.Unwrapped(ctx, k); !found {
@@ -115,7 +115,7 @@ func TestCacheEvictsLeastRecentlyUsed(t *testing.T) {
 	store, _, cache := newCacheEnv(t, 2)
 	a, b, c := key("t1", "a", "f"), key("t1", "b", "f"), key("t1", "c", "f")
 	for _, k := range []keystore.Key{a, b, c} {
-		must(t, store.Store(ctx, k, []byte("w")))
+		must(t, store.Store(ctx, k, []byte("w"), 1))
 	}
 
 	mustGet := func(k keystore.Key) {
@@ -147,7 +147,7 @@ func TestCacheUnwrapFailureSurfacesAsError(t *testing.T) {
 	boom := errors.New("unwrap boom")
 	cache := keystore.NewCache(store, &countingUnwrapper{err: boom}, 8)
 	k := key("t1", "r1", "email")
-	must(t, store.Store(ctx, k, []byte("wrapped")))
+	must(t, store.Store(ctx, k, []byte("wrapped"), 1))
 
 	_, found, err := cache.Unwrapped(ctx, k)
 	if !errors.Is(err, boom) {
@@ -162,7 +162,7 @@ func TestCacheReturnsCopy(t *testing.T) {
 	ctx := context.Background()
 	store, _, cache := newCacheEnv(t, 8)
 	k := key("t1", "r1", "email")
-	must(t, store.Store(ctx, k, []byte("wrapped")))
+	must(t, store.Store(ctx, k, []byte("wrapped"), 1))
 
 	got, _, _ := cache.Unwrapped(ctx, k)
 	got[0] = 'X' // mutating the caller's copy must not poison the cache

@@ -196,7 +196,7 @@ func (s *PostgresStore) sealField(ctx context.Context, recordID, fieldName, valu
 	if err != nil {
 		return nil, fmt.Errorf("data: encrypting %q: %w", fieldName, err)
 	}
-	wrapped, err := s.wrapper.Wrap(dek)
+	wrapped, version, err := s.keyring.WrapActive(dek)
 	if err != nil {
 		return nil, fmt.Errorf("data: wrapping DEK for %q: %w", fieldName, err)
 	}
@@ -204,7 +204,7 @@ func (s *PostgresStore) sealField(ctx context.Context, recordID, fieldName, valu
 		TenantID:  s.tenantID,
 		RecordID:  recordID,
 		FieldName: fieldName,
-	}, wrapped); err != nil {
+	}, wrapped, version); err != nil {
 		return nil, fmt.Errorf("data: storing wrapped DEK for %q: %w", fieldName, err)
 	}
 	return ciphertext, nil

@@ -60,8 +60,12 @@ func (k Key) complete() bool {
 // error), because a missing key is the expected, non-error state after a
 // crypto-shred.
 type KeyStore interface {
-	// Store persists the wrapped DEK for the field value named by key.
-	Store(ctx context.Context, key Key, wrappedDEK []byte) error
+	// Store persists the wrapped DEK for the field value named by key,
+	// stamping it with version — the KEK generation that wrapped it. The
+	// caller passes the version the wrapping key reported (KeyRing.WrapActive)
+	// so the stored kek_version always matches the key that can open the DEK;
+	// there is no implicit default that could mislabel a row during a rotation.
+	Store(ctx context.Context, key Key, wrappedDEK []byte, version int) error
 
 	// Fetch returns the wrapped DEK for key. A key that is absent — never
 	// stored, or shredded — is a clean miss: (nil, false, nil).

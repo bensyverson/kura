@@ -27,17 +27,17 @@ func TestNewPostgresStoreRejectsMisconfiguration(t *testing.T) {
 		db      *sql.DB
 		tenant  string
 		keys    keystore.KeyStore
-		wrapper crypto.Wrapper
+		keyring *crypto.KeyRing
 		cache   *keystore.Cache
 	}{
-		{"nil db", nil, "tenant", ce.Keys, ce.Wrapper, ce.Cache},
-		{"empty tenant", pool, "", ce.Keys, ce.Wrapper, ce.Cache},
-		{"nil keys", pool, "tenant", nil, ce.Wrapper, ce.Cache},
-		{"nil wrapper", pool, "tenant", ce.Keys, nil, ce.Cache},
-		{"nil cache", pool, "tenant", ce.Keys, ce.Wrapper, nil},
+		{"nil db", nil, "tenant", ce.Keys, ce.Ring, ce.Cache},
+		{"empty tenant", pool, "", ce.Keys, ce.Ring, ce.Cache},
+		{"nil keys", pool, "tenant", nil, ce.Ring, ce.Cache},
+		{"nil keyring", pool, "tenant", ce.Keys, nil, ce.Cache},
+		{"nil cache", pool, "tenant", ce.Keys, ce.Ring, nil},
 	}
 	for _, c := range cases {
-		if _, err := NewPostgresStore(c.db, c.tenant, c.keys, c.wrapper, c.cache); !errors.Is(err, ErrMissingDependency) {
+		if _, err := NewPostgresStore(c.db, c.tenant, c.keys, c.keyring, c.cache); !errors.Is(err, ErrMissingDependency) {
 			t.Errorf("%s: err = %v, want ErrMissingDependency", c.name, err)
 		}
 	}

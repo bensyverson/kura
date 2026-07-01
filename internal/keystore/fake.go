@@ -31,16 +31,16 @@ func NewFake() *Fake {
 	return &Fake{keys: make(map[Key]fakeEntry)}
 }
 
-// Store persists a copy of wrappedDEK for key at the initial KEK version (1),
-// matching the Postgres column default. The copy means a caller mutating its
-// slice afterward cannot alter stored state.
-func (f *Fake) Store(_ context.Context, key Key, wrappedDEK []byte) error {
+// Store persists a copy of wrappedDEK for key, stamped with version — the KEK
+// generation that wrapped it. The copy means a caller mutating its slice
+// afterward cannot alter stored state.
+func (f *Fake) Store(_ context.Context, key Key, wrappedDEK []byte, version int) error {
 	if !key.complete() {
 		return ErrIncompleteKey
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.keys[key] = fakeEntry{wrapped: slices.Clone(wrappedDEK), version: 1}
+	f.keys[key] = fakeEntry{wrapped: slices.Clone(wrappedDEK), version: version}
 	return nil
 }
 

@@ -38,13 +38,14 @@ var ErrMissingDependency = errors.New("data: postgres store is missing a require
 type PostgresStore struct {
 	db       *sql.DB
 	tenantID string
-	// keys persists wrapped DEKs on write; wrapper seals a fresh DEK under
-	// the master KEK; cache fronts the key store on read, unwrapping DEKs
-	// and honouring crypto-shred eviction. Writes go through keys+wrapper,
+	// keys persists wrapped DEKs on write; keyring seals a fresh DEK under
+	// the active KEK generation (and reports that generation so the write is
+	// stamped to match); cache fronts the key store on read, unwrapping DEKs
+	// and honouring crypto-shred eviction. Writes go through keys+keyring,
 	// reads through cache (which reads the same store), so a value written
 	// here reads back through the cache.
 	keys    keystore.KeyStore
-	wrapper crypto.Wrapper
+	keyring *crypto.KeyRing
 	cache   *keystore.Cache
 }
 
@@ -53,14 +54,15 @@ var _ RecordStore = (*PostgresStore)(nil)
 // NewPostgresStore returns a PostgresStore reading db, scoped to tenantID,
 // encrypting field values under per-value DEKs. The pool should be
 // connected as the RLS-bound kura_api role; the tenant id comes from
-// deployment configuration. keys is the wrapped-DEK store, wrapper the KEK
-// wrap capability (its blast radius kept small — the store never holds the
-// raw KEK), and cache the read-side unwrapping cache over the same store.
-func NewPostgresStore(db *sql.DB, tenantID string, keys keystore.KeyStore, wrapper crypto.Wrapper, cache *keystore.Cache) (*PostgresStore, error) {
-	if db == nil || tenantID == "" || keys == nil || wrapper == nil || cache == nil {
+// deployment configuration. keys is the wrapped-DEK store, keyring the
+// versioned KEK set (the write path seals under its active generation; its
+// blast radius stays small — the store never holds the raw KEK), and cache
+// the read-side unwrapping cache over the same store.
+func NewPostgresStore(db *sql.DB, tenantID string, keys keystore.KeyStore, keyring *crypto.KeyRing, cache *keystore.Cache) (*PostgresStore, error) {
+	if db == nil || tenantID == "" || keys == nil || keyring == nil || cache == nil {
 		return nil, ErrMissingDependency
 	}
-	return &PostgresStore{db: db, tenantID: tenantID, keys: keys, wrapper: wrapper, cache: cache}, nil
+	return &PostgresStore{db: db, tenantID: tenantID, keys: keys, keyring: keyring, cache: cache}, nil
 }
 
 // Get returns the record with the given id under entity. A missing

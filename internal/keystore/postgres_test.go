@@ -83,7 +83,7 @@ func TestPostgresStoreFetchRoundTrip(t *testing.T) {
 	k := keystore.Key{TenantID: tenant, RecordID: record, FieldName: "email"}
 	wrapped := []byte{0xDE, 0xAD, 0xBE, 0xEF}
 
-	if err := ks.Store(ctx, k, wrapped); err != nil {
+	if err := ks.Store(ctx, k, wrapped, 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	got, found, err := ks.Fetch(ctx, k)
@@ -112,7 +112,7 @@ func TestPostgresFetchAfterShredIsClean(t *testing.T) {
 	ks, _ := keystore.NewPostgresStore(newKeystorePool(t))
 	tenant, record := newUUID(t), newUUID(t)
 	k := keystore.Key{TenantID: tenant, RecordID: record, FieldName: "email"}
-	if err := ks.Store(ctx, k, []byte("dek")); err != nil {
+	if err := ks.Store(ctx, k, []byte("dek"), 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	if _, err := ks.Shred(ctx, tenant, []string{record}); err != nil {
@@ -133,7 +133,7 @@ func TestPostgresShredDeletesTargetedRecordsOnly(t *testing.T) {
 	tenant := newUUID(t)
 	r1, r2 := newUUID(t), newUUID(t)
 	store := func(record, field string) {
-		if err := ks.Store(ctx, keystore.Key{TenantID: tenant, RecordID: record, FieldName: field}, []byte("d")); err != nil {
+		if err := ks.Store(ctx, keystore.Key{TenantID: tenant, RecordID: record, FieldName: field}, []byte("d"), 1); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 	}
@@ -158,8 +158,8 @@ func TestPostgresTenantIsolation(t *testing.T) {
 	ks, _ := keystore.NewPostgresStore(newKeystorePool(t))
 	tenantA, tenantB := newUUID(t), newUUID(t)
 	record := newUUID(t) // same record id under both tenants
-	must(t, ks.Store(ctx, keystore.Key{TenantID: tenantA, RecordID: record, FieldName: "email"}, []byte("A")))
-	must(t, ks.Store(ctx, keystore.Key{TenantID: tenantB, RecordID: record, FieldName: "email"}, []byte("B")))
+	must(t, ks.Store(ctx, keystore.Key{TenantID: tenantA, RecordID: record, FieldName: "email"}, []byte("A"), 1))
+	must(t, ks.Store(ctx, keystore.Key{TenantID: tenantB, RecordID: record, FieldName: "email"}, []byte("B"), 1))
 
 	// Fetch is scoped to its key's tenant.
 	got, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenantA, RecordID: record, FieldName: "email"})

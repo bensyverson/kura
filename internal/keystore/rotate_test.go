@@ -68,7 +68,7 @@ func seedValues(t *testing.T, ctx context.Context, store keystore.KeyStore, tena
 			t.Fatalf("Wrap: %v", err)
 		}
 		key := keystore.Key{TenantID: tenant, RecordID: fmt.Sprintf("r%d", i), FieldName: "f"}
-		if err := store.Store(ctx, key, wrapped); err != nil {
+		if err := store.Store(ctx, key, wrapped, 1); err != nil {
 			t.Fatalf("Store: %v", err)
 		}
 		seeds = append(seeds, seed{key: key, sealed: sealed, plain: plain})

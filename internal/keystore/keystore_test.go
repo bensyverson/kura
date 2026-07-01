@@ -27,7 +27,7 @@ func TestStoreThenFetch(t *testing.T) {
 	k := key("t1", "r1", "email")
 	wrapped := []byte("wrapped-dek-bytes")
 
-	if err := ks.Store(ctx, k, wrapped); err != nil {
+	if err := ks.Store(ctx, k, wrapped, 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	got, found, err := ks.Fetch(ctx, k)
@@ -61,9 +61,9 @@ func TestShredDeletesTargetedRecordsOnly(t *testing.T) {
 	ctx := context.Background()
 	ks := keystore.NewFake()
 	// Two records, the first with two fields.
-	must(t, ks.Store(ctx, key("t1", "r1", "email"), []byte("d1")))
-	must(t, ks.Store(ctx, key("t1", "r1", "phone"), []byte("d2")))
-	must(t, ks.Store(ctx, key("t1", "r2", "email"), []byte("d3")))
+	must(t, ks.Store(ctx, key("t1", "r1", "email"), []byte("d1"), 1))
+	must(t, ks.Store(ctx, key("t1", "r1", "phone"), []byte("d2"), 1))
+	must(t, ks.Store(ctx, key("t1", "r2", "email"), []byte("d3"), 1))
 
 	deleted, err := ks.Shred(ctx, "t1", []string{"r1"})
 	if err != nil {
@@ -88,8 +88,8 @@ func TestShredDeletesTargetedRecordsOnly(t *testing.T) {
 func TestTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 	ks := keystore.NewFake()
-	must(t, ks.Store(ctx, key("tenantA", "r1", "email"), []byte("A")))
-	must(t, ks.Store(ctx, key("tenantB", "r1", "email"), []byte("B")))
+	must(t, ks.Store(ctx, key("tenantA", "r1", "email"), []byte("A"), 1))
+	must(t, ks.Store(ctx, key("tenantB", "r1", "email"), []byte("B"), 1))
 
 	// One tenant cannot fetch another's DEK, even at the same record/field id.
 	got, found, _ := ks.Fetch(ctx, key("tenantA", "r1", "email"))
@@ -114,7 +114,7 @@ func TestStoreRejectsIncompleteKey(t *testing.T) {
 		key("t1", "", "email"),
 		key("t1", "r1", ""),
 	} {
-		if err := ks.Store(ctx, k, []byte("d")); !errors.Is(err, keystore.ErrIncompleteKey) {
+		if err := ks.Store(ctx, k, []byte("d"), 1); !errors.Is(err, keystore.ErrIncompleteKey) {
 			t.Errorf("Store(%+v) err = %v, want ErrIncompleteKey", k, err)
 		}
 	}
@@ -125,7 +125,7 @@ func TestStoreAndFetchCopyToPreventAliasing(t *testing.T) {
 	ks := keystore.NewFake()
 	k := key("t1", "r1", "email")
 	wrapped := []byte("original")
-	must(t, ks.Store(ctx, k, wrapped))
+	must(t, ks.Store(ctx, k, wrapped, 1))
 
 	// Mutating the caller's slice after Store must not change stored state.
 	wrapped[0] = 'X'

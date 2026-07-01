@@ -52,7 +52,7 @@ func storeSealed(t *testing.T, ctx context.Context, ks keystore.KeyStore, tenant
 		t.Fatalf("Wrap: %v", err)
 	}
 	key := keystore.Key{TenantID: tenant, RecordID: newUUID(t), FieldName: "email"}
-	if err := ks.Store(ctx, key, wrapped); err != nil {
+	if err := ks.Store(ctx, key, wrapped, 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
 	return key, sealed

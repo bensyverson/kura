@@ -50,6 +50,32 @@ func TestPostgresStoreInsertRoundTrips(t *testing.T) {
 	}
 }
 
+// The write path stamps the active KEK generation on the wrapped DEK it
+// stores — taken from the key ring, not the old hardcoded default — so a
+// value written while the active KEK is v7 is labelled v7, and a later
+// rotation selects it correctly rather than trying the wrong key.
+func TestPostgresStoreInsertStampsActiveKEKVersion(t *testing.T) {
+	env := newDataTestEnv(t)
+	ce := newCryptoEnvAtVersion(t, 7)
+	tenant := newTenantID(t, env)
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
+
+	id, err := store.Insert(context.Background(), RecordInput{
+		Entity: "patient",
+		Fields: []FieldInput{{Name: "ssn", Type: "string", Value: "123-45-6789", Encrypted: true}},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	v, ok := ce.Keys.Version(keystore.Key{TenantID: tenant, RecordID: id, FieldName: "ssn"})
+	if !ok {
+		t.Fatal("no wrapped DEK stored for the encrypted ssn field")
+	}
+	if v != 7 {
+		t.Errorf("stored kek_version = %d, want 7 (the active generation, not a hardcoded default)", v)
+	}
+}
+
 // An Insert field flagged Encrypted is genuinely ciphertext at rest, while
 // a plaintext field lands in value_text. This is the write half of the
 // encryption guarantee whose read half TestPostgresStoreDecryptsEncryptedFields

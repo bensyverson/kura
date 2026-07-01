@@ -147,6 +147,7 @@ func newTenantID(t *testing.T, env testEnv) string {
 type cryptoEnv struct {
 	Keys    *keystore.Fake
 	Wrapper crypto.Wrapper
+	Ring    *crypto.KeyRing
 	Cache   *keystore.Cache
 }
 
@@ -156,13 +157,24 @@ type cryptoEnv struct {
 // main-DB read/write paths against a fake key store without provisioning a
 // second cluster (the Postgres key store has its own integration tests).
 func newCryptoEnv(t *testing.T) *cryptoEnv {
+	return newCryptoEnvAtVersion(t, 1)
+}
+
+// newCryptoEnvAtVersion builds a cryptoEnv whose single test KEK is the active
+// generation `active`. It lets a test prove the write path stamps the active
+// version (not a hardcoded default) by choosing a non-default active.
+func newCryptoEnvAtVersion(t *testing.T, active int) *cryptoEnv {
 	t.Helper()
 	w, err := crypto.NewKeyWrapper([]byte("0123456789abcdef0123456789abcdef"))
 	if err != nil {
 		t.Fatalf("NewKeyWrapper: %v", err)
 	}
+	ring, err := crypto.NewKeyRing(active, map[int]crypto.Wrapper{active: w})
+	if err != nil {
+		t.Fatalf("NewKeyRing: %v", err)
+	}
 	keys := keystore.NewFake()
-	return &cryptoEnv{Keys: keys, Wrapper: w, Cache: keystore.NewCache(keys, w, 128)}
+	return &cryptoEnv{Keys: keys, Wrapper: w, Ring: ring, Cache: keystore.NewCache(keys, w, 128)}
 }
 
 // seal encrypts value under a fresh per-value DEK and stores the wrapped
@@ -184,7 +196,7 @@ func (ce *cryptoEnv) seal(t *testing.T, tenantID, recordID, field, value string)
 	}
 	if err := ce.Keys.Store(context.Background(), keystore.Key{
 		TenantID: tenantID, RecordID: recordID, FieldName: field,
-	}, wrapped); err != nil {
+	}, wrapped, ce.Ring.ActiveVersion()); err != nil {
 		t.Fatalf("keystore Store: %v", err)
 	}
 	return ciphertext
@@ -194,7 +206,7 @@ func (ce *cryptoEnv) seal(t *testing.T, tenantID, recordID, field, value string)
 // ce's crypto collaborators. It fails the test on a construction error.
 func newRecordStore(t *testing.T, pool *sql.DB, tenant string, ce *cryptoEnv) *PostgresStore {
 	t.Helper()
-	s, err := NewPostgresStore(pool, tenant, ce.Keys, ce.Wrapper, ce.Cache)
+	s, err := NewPostgresStore(pool, tenant, ce.Keys, ce.Ring, ce.Cache)
 	if err != nil {
 		t.Fatalf("NewPostgresStore: %v", err)
 	}

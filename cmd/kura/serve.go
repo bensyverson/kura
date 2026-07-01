@@ -437,6 +437,13 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	if err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("serve: %s: %w", secrets.EncryptionKeyName, err)
 	}
+	// The write path seals under the active KEK generation via a key ring. A
+	// single generation (v1) covers steady state; a rotation loads the
+	// retiring generation alongside it (wired in the rotation runtime step).
+	keyring, err := crypto.NewKeyRing(1, map[int]crypto.Wrapper{1: wrapper})
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("serve: building key ring: %w", err)
+	}
 	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -519,7 +526,7 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	// wrapped DEKs straight through ksStore and reads through the cache.
 	dekCache := keystore.NewCache(ksStore, wrapper, keystoreCacheCapacity)
 
-	pg, err := data.NewPostgresStore(pool, tenantID, ksStore, wrapper, dekCache)
+	pg, err := data.NewPostgresStore(pool, tenantID, ksStore, keyring, dekCache)
 	if err != nil {
 		keystorePool.Close()
 		pool.Close()

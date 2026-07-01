@@ -33,16 +33,19 @@ func NewPostgresStore(db *sql.DB) (*PostgresStore, error) {
 	return &PostgresStore{db: db}, nil
 }
 
-// Store persists the wrapped DEK for key's field value.
-func (s *PostgresStore) Store(ctx context.Context, key Key, wrappedDEK []byte) error {
+// Store persists the wrapped DEK for key's field value, stamped with version
+// — the KEK generation that wrapped it. The version is explicit rather than
+// the column default, so a value written after a rotation advanced the active
+// KEK is labelled with the key that actually wrapped it.
+func (s *PostgresStore) Store(ctx context.Context, key Key, wrappedDEK []byte, version int) error {
 	if !key.complete() {
 		return ErrIncompleteKey
 	}
 	return s.inTenantTx(ctx, key.TenantID, false, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx,
-			`INSERT INTO kura.wrapped_deks (tenant_id, record_id, field_name, wrapped_dek)
-			 VALUES ($1, $2, $3, $4)`,
-			key.TenantID, key.RecordID, key.FieldName, wrappedDEK)
+			`INSERT INTO kura.wrapped_deks (tenant_id, record_id, field_name, wrapped_dek, kek_version)
+			 VALUES ($1, $2, $3, $4, $5)`,
+			key.TenantID, key.RecordID, key.FieldName, wrappedDEK, version)
 		return err
 	})
 }
