@@ -86,7 +86,7 @@ func TestPostgresStoreFetchRoundTrip(t *testing.T) {
 	if err := ks.Store(ctx, k, wrapped, 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	got, found, err := ks.Fetch(ctx, k)
+	got, _, found, err := ks.Fetch(ctx, k)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestPostgresStoreFetchRoundTrip(t *testing.T) {
 func TestPostgresFetchMissIsClean(t *testing.T) {
 	ctx := context.Background()
 	ks, _ := keystore.NewPostgresStore(newKeystorePool(t))
-	_, found, err := ks.Fetch(ctx, keystore.Key{TenantID: newUUID(t), RecordID: newUUID(t), FieldName: "email"})
+	_, _, found, err := ks.Fetch(ctx, keystore.Key{TenantID: newUUID(t), RecordID: newUUID(t), FieldName: "email"})
 	if err != nil {
 		t.Fatalf("Fetch of absent key returned error %v, want clean miss", err)
 	}
@@ -118,7 +118,7 @@ func TestPostgresFetchAfterShredIsClean(t *testing.T) {
 	if _, err := ks.Shred(ctx, tenant, []string{record}); err != nil {
 		t.Fatalf("Shred: %v", err)
 	}
-	_, found, err := ks.Fetch(ctx, k)
+	_, _, found, err := ks.Fetch(ctx, k)
 	if err != nil {
 		t.Fatalf("Fetch after shred returned error %v, want clean miss", err)
 	}
@@ -148,7 +148,7 @@ func TestPostgresShredDeletesTargetedRecordsOnly(t *testing.T) {
 	if deleted != 2 {
 		t.Fatalf("Shred deleted = %d, want 2", deleted)
 	}
-	if _, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenant, RecordID: r2, FieldName: "email"}); !found {
+	if _, _, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenant, RecordID: r2, FieldName: "email"}); !found {
 		t.Error("r2 was deleted by a shred targeting only r1")
 	}
 }
@@ -162,7 +162,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 	must(t, ks.Store(ctx, keystore.Key{TenantID: tenantB, RecordID: record, FieldName: "email"}, []byte("B"), 1))
 
 	// Fetch is scoped to its key's tenant.
-	got, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenantA, RecordID: record, FieldName: "email"})
+	got, _, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenantA, RecordID: record, FieldName: "email"})
 	if !found || string(got) != "A" {
 		t.Fatalf("tenantA Fetch = %q found=%v, want A/true", got, found)
 	}
@@ -170,7 +170,7 @@ func TestPostgresTenantIsolation(t *testing.T) {
 	if _, err := ks.Shred(ctx, tenantA, []string{record}); err != nil {
 		t.Fatalf("Shred: %v", err)
 	}
-	if _, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenantB, RecordID: record, FieldName: "email"}); !found {
+	if _, _, found, _ := ks.Fetch(ctx, keystore.Key{TenantID: tenantB, RecordID: record, FieldName: "email"}); !found {
 		t.Error("tenantB's DEK was deleted by a shred scoped to tenantA")
 	}
 }

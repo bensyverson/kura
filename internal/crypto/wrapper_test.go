@@ -10,11 +10,13 @@ import (
 	"github.com/bensyverson/kura/internal/keystore"
 )
 
-// A KeyWrapper is the KEK capability the data layer and the DEK cache depend
-// on instead of the raw KEK; it must satisfy both seams.
+// A KeyWrapper is the single-KEK wrap/unwrap capability the write path and
+// rotation compose from. The DEK cache depends on the version-aware
+// keystore.Unwrapper seam, which the KeyRing satisfies — it selects the KEK by
+// the row's generation so a mixed-version store reads correctly mid-rotation.
 var (
 	_ crypto.Wrapper     = (*crypto.KeyWrapper)(nil)
-	_ keystore.Unwrapper = (*crypto.KeyWrapper)(nil)
+	_ keystore.Unwrapper = (*crypto.KeyRing)(nil)
 )
 
 func freshKEK(t *testing.T) []byte {

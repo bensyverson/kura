@@ -44,15 +44,16 @@ func (f *Fake) Store(_ context.Context, key Key, wrappedDEK []byte, version int)
 	return nil
 }
 
-// Fetch returns a copy of the wrapped DEK for key, or a clean miss if absent.
-func (f *Fake) Fetch(_ context.Context, key Key) ([]byte, bool, error) {
+// Fetch returns a copy of the wrapped DEK for key and the KEK generation that
+// wrapped it, or a clean miss (nil, 0, false, nil) if absent.
+func (f *Fake) Fetch(_ context.Context, key Key) (wrappedDEK []byte, version int, found bool, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	e, ok := f.keys[key]
 	if !ok {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
-	return slices.Clone(e.wrapped), true, nil
+	return slices.Clone(e.wrapped), e.version, true, nil
 }
 
 // Shred deletes every key for the given records within tenantID and returns

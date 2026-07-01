@@ -524,7 +524,7 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	// The cache fronts the key store on the read path, unwrapping DEKs with
 	// the KEK and honouring crypto-shred eviction. The record store writes
 	// wrapped DEKs straight through ksStore and reads through the cache.
-	dekCache := keystore.NewCache(ksStore, wrapper, keystoreCacheCapacity)
+	dekCache := keystore.NewCache(ksStore, keyring, keystoreCacheCapacity)
 
 	pg, err := data.NewPostgresStore(pool, tenantID, ksStore, keyring, dekCache)
 	if err != nil {

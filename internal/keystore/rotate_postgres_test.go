@@ -95,7 +95,7 @@ func TestPostgresRotateReWrapsInPlace(t *testing.T) {
 		if v := kekVersion(t, pool, c.key); v != 2 {
 			t.Errorf("%v: kek_version = %d, want 2", c.key, v)
 		}
-		wrapped, found, err := ks.Fetch(ctx, c.key)
+		wrapped, _, found, err := ks.Fetch(ctx, c.key)
 		if err != nil || !found {
 			t.Fatalf("Fetch(%v): found=%v err=%v", c.key, found, err)
 		}

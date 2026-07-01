@@ -30,7 +30,7 @@ func TestStoreThenFetch(t *testing.T) {
 	if err := ks.Store(ctx, k, wrapped, 1); err != nil {
 		t.Fatalf("Store: %v", err)
 	}
-	got, found, err := ks.Fetch(ctx, k)
+	got, _, found, err := ks.Fetch(ctx, k)
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestStoreThenFetch(t *testing.T) {
 func TestFetchAbsentIsCleanMiss(t *testing.T) {
 	ctx := context.Background()
 	ks := keystore.NewFake()
-	got, found, err := ks.Fetch(ctx, key("t1", "missing", "email"))
+	got, _, found, err := ks.Fetch(ctx, key("t1", "missing", "email"))
 	if err != nil {
 		t.Fatalf("Fetch of absent key returned error %v, want clean miss", err)
 	}
@@ -73,14 +73,14 @@ func TestShredDeletesTargetedRecordsOnly(t *testing.T) {
 		t.Fatalf("Shred deleted = %d, want 2 (both of r1's fields)", deleted)
 	}
 	// r1's keys are gone...
-	if _, found, _ := ks.Fetch(ctx, key("t1", "r1", "email")); found {
+	if _, _, found, _ := ks.Fetch(ctx, key("t1", "r1", "email")); found {
 		t.Error("r1/email still present after shred")
 	}
-	if _, found, _ := ks.Fetch(ctx, key("t1", "r1", "phone")); found {
+	if _, _, found, _ := ks.Fetch(ctx, key("t1", "r1", "phone")); found {
 		t.Error("r1/phone still present after shred")
 	}
 	// ...but r2's key is untouched.
-	if _, found, _ := ks.Fetch(ctx, key("t1", "r2", "email")); !found {
+	if _, _, found, _ := ks.Fetch(ctx, key("t1", "r2", "email")); !found {
 		t.Error("r2/email was deleted by a shred targeting only r1")
 	}
 }
@@ -92,7 +92,7 @@ func TestTenantIsolation(t *testing.T) {
 	must(t, ks.Store(ctx, key("tenantB", "r1", "email"), []byte("B"), 1))
 
 	// One tenant cannot fetch another's DEK, even at the same record/field id.
-	got, found, _ := ks.Fetch(ctx, key("tenantA", "r1", "email"))
+	got, _, found, _ := ks.Fetch(ctx, key("tenantA", "r1", "email"))
 	if !found || !bytes.Equal(got, []byte("A")) {
 		t.Fatalf("tenantA fetch = %q found=%v, want A/true", got, found)
 	}
@@ -101,7 +101,7 @@ func TestTenantIsolation(t *testing.T) {
 	if _, err := ks.Shred(ctx, "tenantA", []string{"r1"}); err != nil {
 		t.Fatalf("Shred: %v", err)
 	}
-	if _, found, _ := ks.Fetch(ctx, key("tenantB", "r1", "email")); !found {
+	if _, _, found, _ := ks.Fetch(ctx, key("tenantB", "r1", "email")); !found {
 		t.Error("tenantB's DEK was deleted by a shred scoped to tenantA")
 	}
 }
@@ -129,13 +129,13 @@ func TestStoreAndFetchCopyToPreventAliasing(t *testing.T) {
 
 	// Mutating the caller's slice after Store must not change stored state.
 	wrapped[0] = 'X'
-	got, _, _ := ks.Fetch(ctx, k)
+	got, _, _, _ := ks.Fetch(ctx, k)
 	if !bytes.Equal(got, []byte("original")) {
 		t.Fatalf("stored value changed via caller's slice: got %q", got)
 	}
 	// Mutating the returned slice must not corrupt the store either.
 	got[0] = 'Y'
-	again, _, _ := ks.Fetch(ctx, k)
+	again, _, _, _ := ks.Fetch(ctx, k)
 	if !bytes.Equal(again, []byte("original")) {
 		t.Fatalf("stored value changed via returned slice: got %q", again)
 	}

@@ -16,7 +16,7 @@ type countingStore struct {
 	fetches int
 }
 
-func (c *countingStore) Fetch(ctx context.Context, k keystore.Key) ([]byte, bool, error) {
+func (c *countingStore) Fetch(ctx context.Context, k keystore.Key) ([]byte, int, bool, error) {
 	c.fetches++
 	return c.Fake.Fetch(ctx, k)
 }
@@ -28,7 +28,7 @@ type countingUnwrapper struct {
 	err   error
 }
 
-func (u *countingUnwrapper) Unwrap(wrapped []byte) ([]byte, error) {
+func (u *countingUnwrapper) Unwrap(wrapped []byte, _ int) ([]byte, error) {
 	u.calls++
 	if u.err != nil {
 		return nil, u.err
@@ -101,7 +101,7 @@ func TestCacheShredInvalidatesAndDelegates(t *testing.T) {
 		t.Fatalf("Shred deleted = %d, want 1 (delegated to store)", deleted)
 	}
 	// The underlying store no longer holds the key...
-	if _, found, _ := store.Fetch(ctx, k); found {
+	if _, _, found, _ := store.Fetch(ctx, k); found {
 		t.Fatal("store still holds the DEK after cache.Shred")
 	}
 	// ...and a post-shred read must NOT be served from the stale cache.

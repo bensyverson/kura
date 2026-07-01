@@ -96,7 +96,7 @@ func TestRotateReWrapsSoValuesDecryptUnderTheNewKEK(t *testing.T) {
 	}
 
 	for _, s := range seeds {
-		wrapped, found, err := store.Fetch(ctx, s.key)
+		wrapped, _, found, err := store.Fetch(ctx, s.key)
 		if err != nil || !found {
 			t.Fatalf("Fetch(%v): found=%v err=%v", s.key, found, err)
 		}
@@ -159,7 +159,7 @@ func TestRotateIsResumableAcrossInterruptions(t *testing.T) {
 		t.Errorf("%d rows still at v1 after completion", left)
 	}
 	for _, s := range seeds {
-		wrapped, _, err := store.Fetch(ctx, s.key)
+		wrapped, _, _, err := store.Fetch(ctx, s.key)
 		if err != nil {
 			t.Fatalf("Fetch: %v", err)
 		}

@@ -67,9 +67,11 @@ type KeyStore interface {
 	// there is no implicit default that could mislabel a row during a rotation.
 	Store(ctx context.Context, key Key, wrappedDEK []byte, version int) error
 
-	// Fetch returns the wrapped DEK for key. A key that is absent — never
-	// stored, or shredded — is a clean miss: (nil, false, nil).
-	Fetch(ctx context.Context, key Key) (wrappedDEK []byte, found bool, err error)
+	// Fetch returns the wrapped DEK for key and the KEK generation
+	// (kek_version) that wrapped it, so the read path can open the row under
+	// the matching key. A key that is absent — never stored, or shredded — is
+	// a clean miss: (nil, 0, false, nil).
+	Fetch(ctx context.Context, key Key) (wrappedDEK []byte, version int, found bool, err error)
 
 	// Shred deletes every wrapped DEK for the given record ids within
 	// tenantID and returns how many were deleted. This is crypto-shredding:

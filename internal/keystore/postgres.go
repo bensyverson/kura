@@ -50,18 +50,18 @@ func (s *PostgresStore) Store(ctx context.Context, key Key, wrappedDEK []byte, v
 	})
 }
 
-// Fetch returns the wrapped DEK for key, or a clean miss if it was never
-// stored or has been shredded. A malformed (non-uuid) record id matches
-// nothing and reads as a miss rather than erroring, mirroring the record
-// store's tolerance.
-func (s *PostgresStore) Fetch(ctx context.Context, key Key) ([]byte, bool, error) {
+// Fetch returns the wrapped DEK for key and the KEK generation that wrapped
+// it, or a clean miss if it was never stored or has been shredded. A
+// malformed (non-uuid) record id matches nothing and reads as a miss rather
+// than erroring, mirroring the record store's tolerance.
+func (s *PostgresStore) Fetch(ctx context.Context, key Key) (wrappedDEK []byte, version int, found bool, err error) {
 	var wrapped []byte
-	found := false
-	err := s.inTenantTx(ctx, key.TenantID, true, func(tx *sql.Tx) error {
+	var ver int
+	err = s.inTenantTx(ctx, key.TenantID, true, func(tx *sql.Tx) error {
 		switch err := tx.QueryRowContext(ctx,
-			`SELECT wrapped_dek FROM kura.wrapped_deks
+			`SELECT wrapped_dek, kek_version FROM kura.wrapped_deks
 			 WHERE tenant_id::text = $1 AND record_id::text = $2 AND field_name = $3`,
-			key.TenantID, key.RecordID, key.FieldName).Scan(&wrapped); {
+			key.TenantID, key.RecordID, key.FieldName).Scan(&wrapped, &ver); {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil
 		case err != nil:
@@ -71,12 +71,12 @@ func (s *PostgresStore) Fetch(ctx context.Context, key Key) ([]byte, bool, error
 		return nil
 	})
 	if err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	}
 	if !found {
-		return nil, false, nil
+		return nil, 0, false, nil
 	}
-	return wrapped, true, nil
+	return wrapped, ver, true, nil
 }
 
 // Shred deletes every wrapped DEK for the given records within tenantID,

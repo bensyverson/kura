@@ -7,13 +7,14 @@ import (
 	"sync"
 )
 
-// Unwrapper unwraps a wrapped DEK under the master KEK, yielding the raw DEK
-// ready to decrypt a value. It is the read-side half of the KEK capability
-// (the write side wraps); the cache depends only on unwrap. Sourcing the KEK
-// from the secrets manager is a separate concern — the cache takes any
-// implementation, so it can be unit-tested with a trivial one.
+// Unwrapper opens a wrapped DEK under the KEK generation that wrapped it,
+// yielding the raw DEK ready to decrypt a value. It is the read-side half of
+// the KEK capability (the write side wraps); the cache depends only on this.
+// crypto.KeyRing is the production implementation — selecting the right KEK by
+// version so a mixed-version store, mid-rotation, reads correctly — but the
+// cache takes any implementation, so it can be unit-tested with a trivial one.
 type Unwrapper interface {
-	Unwrap(wrapped []byte) (dek []byte, err error)
+	Unwrap(wrapped []byte, version int) (dek []byte, err error)
 }
 
 // Cache is an in-process LRU of unwrapped DEKs in front of a KeyStore. A hot
@@ -68,14 +69,14 @@ func (c *Cache) Unwrapped(ctx context.Context, key Key) ([]byte, bool, error) {
 		return slices.Clone(el.Value.(*cacheEntry).dek), true, nil
 	}
 
-	wrapped, found, err := c.store.Fetch(ctx, key)
+	wrapped, version, found, err := c.store.Fetch(ctx, key)
 	if err != nil {
 		return nil, false, err
 	}
 	if !found {
 		return nil, false, nil
 	}
-	dek, err := c.unwrap.Unwrap(wrapped)
+	dek, err := c.unwrap.Unwrap(wrapped, version)
 	if err != nil {
 		return nil, false, err
 	}

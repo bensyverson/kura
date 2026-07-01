@@ -174,7 +174,7 @@ func newCryptoEnvAtVersion(t *testing.T, active int) *cryptoEnv {
 		t.Fatalf("NewKeyRing: %v", err)
 	}
 	keys := keystore.NewFake()
-	return &cryptoEnv{Keys: keys, Wrapper: w, Ring: ring, Cache: keystore.NewCache(keys, w, 128)}
+	return &cryptoEnv{Keys: keys, Wrapper: w, Ring: ring, Cache: keystore.NewCache(keys, ring, 128)}
 }
 
 // seal encrypts value under a fresh per-value DEK and stores the wrapped

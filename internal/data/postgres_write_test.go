@@ -109,7 +109,7 @@ func TestPostgresStoreInsertEncryptsFlaggedFieldsAtRest(t *testing.T) {
 	// the key store, keyed by (tenant, record, field). Without it the
 	// ciphertext would be unrecoverable — so its presence is the write half
 	// of crypto-shreddability.
-	wrapped, found, err := ce.Keys.Fetch(context.Background(), keystore.Key{
+	wrapped, _, found, err := ce.Keys.Fetch(context.Background(), keystore.Key{
 		TenantID: tenant, RecordID: id, FieldName: "ssn",
 	})
 	if err != nil {
