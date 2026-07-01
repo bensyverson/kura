@@ -134,6 +134,12 @@ code**: add an entity to the manifest and it appears here, columns and all.
 - **`/data/{entity}/{id}`** is a single record: each field with its masked
   value and a PII tag for fields that carry personal data.
 
+A field whose encryption key was [crypto-shredded](database/#encryption-at-rest)
+renders with a quiet **erased** tag and an `[erased]` marker in place of a
+value — kept visually distinct from a policy-masked value (`[redacted]`) and
+from a field that was never set (an em-dash), so a reviewer can tell erasure
+apart from absence. It mirrors the CLI's `[erased]` sentinel.
+
 Records arrive **masked to the viewer's principal** — masking happens at
 the gate ([`GET /api/{entity}`](server) and `/{id}`), before the bytes
 leave the server. The dashboard renders exactly what the API returns and

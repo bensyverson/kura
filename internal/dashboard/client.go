@@ -247,12 +247,15 @@ func (c *apiClient) manifest(ctx context.Context) (*manifest.Manifest, error) {
 	return &m, nil
 }
 
-// recordRow is one record from a list or single read: its id and its
-// masked fields, exactly as the remote returned them. The dashboard never
-// unmasks — masking happened at the gate before these bytes were sent.
+// recordRow is one record from a list or single read: its id, its masked
+// fields, and the names of any crypto-shredded fields, exactly as the
+// remote returned them. The dashboard never unmasks — masking happened at
+// the gate before these bytes were sent — and an erased field arrives
+// absent from Fields and named in Erased.
 type recordRow struct {
 	ID     string            `json:"id"`
 	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased"`
 }
 
 // listRecords reads a masked, bounded page of an entity's records from
@@ -282,21 +285,18 @@ func (c *apiClient) listRecords(ctx context.Context, entity string, limit, offse
 // record reads one masked record from GET /api/{entity}/{id}. The response
 // body wraps the masked field map alongside the names of any
 // crypto-shredded fields; the id comes from the path. A missing record
-// surfaces as ErrRemoteNotFound.
-//
-// The dashboard does not yet render the erased list — an erased field
-// simply reads as an empty value in the detail view, as it did before
-// erasure existed — so only the fields map is returned here. Surfacing
-// erased fields in the dashboard is a follow-up.
-func (c *apiClient) record(ctx context.Context, entity, id string) (map[string]string, error) {
+// surfaces as ErrRemoteNotFound. A field named in the erased list is absent
+// from the field map — its value is gone by design — so the two are
+// returned together and the view marks the erased fields distinctly.
+func (c *apiClient) record(ctx context.Context, entity, id string) (map[string]string, []string, error) {
 	var body struct {
 		Fields map[string]string `json:"fields"`
 		Erased []string          `json:"erased"`
 	}
 	if err := c.getJSON(ctx, "/api/"+url.PathEscape(entity)+"/"+url.PathEscape(id), &body); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return body.Fields, nil
+	return body.Fields, body.Erased, nil
 }
 
 // startReview starts a new access review on the remote (POST /api/reviews),

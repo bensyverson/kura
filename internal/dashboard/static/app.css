@@ -700,6 +700,13 @@ h3 {
 /* A quiet "coming soon" marker for a documented-but-unshipped surface. */
 .badge-soon { background: var(--surface-2); color: var(--text-muted); text-transform: none; font-weight: 600; }
 
+/* The erased tag is a factual, permanent state — a value gone by design,
+   not an action to take — so it stays a quiet neutral, distinct from the
+   vermilion PII/attention pigment. The [erased] value marker echoes the
+   CLI's sentinel so the two read the same across surfaces. */
+.badge-erased { background: var(--surface-2); color: var(--text-muted); text-transform: none; font-weight: 600; }
+.erased-value { color: var(--text-muted); font-style: italic; }
+
 /* Wide record tables scroll horizontally rather than overflowing the panel. */
 .table-scroll { overflow-x: auto; margin-top: var(--space-4); }
 .table-scroll .table { margin-top: 0; }
