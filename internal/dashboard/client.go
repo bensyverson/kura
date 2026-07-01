@@ -280,14 +280,23 @@ func (c *apiClient) listRecords(ctx context.Context, entity string, limit, offse
 }
 
 // record reads one masked record from GET /api/{entity}/{id}. The response
-// body is the masked field map; the id comes from the path. A missing
-// record surfaces as ErrRemoteNotFound.
+// body wraps the masked field map alongside the names of any
+// crypto-shredded fields; the id comes from the path. A missing record
+// surfaces as ErrRemoteNotFound.
+//
+// The dashboard does not yet render the erased list — an erased field
+// simply reads as an empty value in the detail view, as it did before
+// erasure existed — so only the fields map is returned here. Surfacing
+// erased fields in the dashboard is a follow-up.
 func (c *apiClient) record(ctx context.Context, entity, id string) (map[string]string, error) {
-	var fields map[string]string
-	if err := c.getJSON(ctx, "/api/"+url.PathEscape(entity)+"/"+url.PathEscape(id), &fields); err != nil {
+	var body struct {
+		Fields map[string]string `json:"fields"`
+		Erased []string          `json:"erased"`
+	}
+	if err := c.getJSON(ctx, "/api/"+url.PathEscape(entity)+"/"+url.PathEscape(id), &body); err != nil {
 		return nil, err
 	}
-	return fields, nil
+	return body.Fields, nil
 }
 
 // startReview starts a new access review on the remote (POST /api/reviews),

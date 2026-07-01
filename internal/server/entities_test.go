@@ -117,24 +117,24 @@ func TestEntityGetIsMaskedPerPrincipal(t *testing.T) {
 	if adminRec.status != http.StatusOK {
 		t.Fatalf("admin get status = %d, want 200; body %s", adminRec.status, adminRec.body.String())
 	}
-	var adminFields map[string]string
-	if err := json.Unmarshal(adminRec.body.Bytes(), &adminFields); err != nil {
+	var adminResp recordResponse
+	if err := json.Unmarshal(adminRec.body.Bytes(), &adminResp); err != nil {
 		t.Fatalf("decoding admin body: %v", err)
 	}
-	if adminFields["account"] != "ACCT-1" {
-		t.Errorf("admin account = %q, want plaintext ACCT-1", adminFields["account"])
+	if adminResp.Fields["account"] != "ACCT-1" {
+		t.Errorf("admin account = %q, want plaintext ACCT-1", adminResp.Fields["account"])
 	}
 
 	userRec := doGet(t, srv, "/api/patient/p1", userTok)
-	var userFields map[string]string
-	if err := json.Unmarshal(userRec.body.Bytes(), &userFields); err != nil {
+	var userResp recordResponse
+	if err := json.Unmarshal(userRec.body.Bytes(), &userResp); err != nil {
 		t.Fatalf("decoding user body: %v", err)
 	}
-	if userFields["full_name"] != "Jane Doe" {
-		t.Errorf("user full_name = %q, want plaintext", userFields["full_name"])
+	if userResp.Fields["full_name"] != "Jane Doe" {
+		t.Errorf("user full_name = %q, want plaintext", userResp.Fields["full_name"])
 	}
-	if userFields["account"] != gate.Redacted {
-		t.Errorf("user account = %q, want %q", userFields["account"], gate.Redacted)
+	if userResp.Fields["account"] != gate.Redacted {
+		t.Errorf("user account = %q, want %q", userResp.Fields["account"], gate.Redacted)
 	}
 }
 

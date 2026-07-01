@@ -269,7 +269,10 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(fields)
+		_ = json.NewEncoder(w).Encode(struct {
+			Fields map[string]string `json:"fields"`
+			Erased []string          `json:"erased,omitempty"`
+		}{Fields: fields})
 	})
 
 	mux.HandleFunc("POST /api/reviews", func(w http.ResponseWriter, r *http.Request) {

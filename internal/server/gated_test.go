@@ -65,8 +65,8 @@ func patientBinding(r *http.Request, p identity.Principal) (gate.AccessRequest, 
 		Entity:     "patient",
 		ResourceID: "p1",
 	}
-	fetch := func(_ context.Context) (map[string]string, error) {
-		return map[string]string{"full_name": "Jane Doe", "account": "ACCT-555"}, nil
+	fetch := func(_ context.Context) (gate.Record, error) {
+		return gate.Record{Fields: map[string]string{"full_name": "Jane Doe", "account": "ACCT-555"}}, nil
 	}
 	return req, fetch, nil
 }
@@ -96,12 +96,12 @@ func TestGatedRouteEmitsAuditEvent(t *testing.T) {
 	if rec.status != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body = %s", rec.status, rec.body.String())
 	}
-	var fields map[string]string
-	if err := json.Unmarshal(rec.body.Bytes(), &fields); err != nil {
+	var resp recordResponse
+	if err := json.Unmarshal(rec.body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding response body %q: %v", rec.body.String(), err)
 	}
-	if fields["full_name"] != "Jane Doe" {
-		t.Errorf("full_name = %q, want %q", fields["full_name"], "Jane Doe")
+	if resp.Fields["full_name"] != "Jane Doe" {
+		t.Errorf("full_name = %q, want %q", resp.Fields["full_name"], "Jane Doe")
 	}
 
 	events, _ := store.Query(context.Background(), audit.Filter{})

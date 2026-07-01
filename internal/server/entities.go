@@ -151,15 +151,15 @@ func getBinding(entity string, store data.RecordStore) dataBinding {
 			Entity:     entity,
 			ResourceID: id,
 		}
-		fetch := func(ctx context.Context) (map[string]string, error) {
+		fetch := func(ctx context.Context) (gate.Record, error) {
 			rec, ok, err := store.Get(ctx, entity, id)
 			if err != nil {
-				return nil, err
+				return gate.Record{}, err
 			}
 			if !ok {
-				return nil, data.ErrNotFound
+				return gate.Record{}, data.ErrNotFound
 			}
-			return rec.Fields, nil
+			return gate.Record{ID: rec.ID, Fields: rec.Fields, Erased: rec.Erased}, nil
 		}
 		return req, fetch, nil
 	}
@@ -189,7 +189,7 @@ func listBindingFor(entity string, store data.RecordStore) listBinding {
 			}
 			out := make([]gate.Record, len(recs))
 			for i, rec := range recs {
-				out[i] = gate.Record{ID: rec.ID, Fields: rec.Fields}
+				out[i] = gate.Record{ID: rec.ID, Fields: rec.Fields, Erased: rec.Erased}
 			}
 			return out, nil
 		}

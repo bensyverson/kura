@@ -77,6 +77,16 @@ exist at all — exactly right for a server that has no schema yet.
   describes the read, the gate performs it and redacts the result. A get
   for a record that does not exist is a `404`; a denied request is a
   `403`.
+- **A read carries its erased fields.** A record with a crypto-shredded
+  field reads back normally — never an error. The get response is
+  `{"fields": {…}, "erased": [names…]}`, and each record in a list page
+  carries the same `erased` list; a shredded field is **absent from
+  `fields` and named in `erased`**, so a client can tell a field that was
+  erased (its key destroyed by design) apart from one that was never set,
+  and never sees the ciphertext. `erased` is elided when empty, so an
+  ordinary record reads as just its fields. This is distinct from a
+  genuine decrypt failure — tampered ciphertext or a wrong KEK — which
+  stays a hard `500`, never a silent erased read.
 - **List endpoints are bounded by default.** `GET /api/{entity}` accepts
   optional `limit` and `offset` query parameters. The gate clamps the
   page — a missing limit becomes the **default page size of 50**, and a

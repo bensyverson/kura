@@ -122,12 +122,12 @@ func TestIngestEndpointCreatesAndReadsBackRecord(t *testing.T) {
 	if got.status != http.StatusOK {
 		t.Fatalf("GET status = %d, want 200; body %s", got.status, got.body.String())
 	}
-	var fields map[string]string
-	if err := json.Unmarshal(got.body.Bytes(), &fields); err != nil {
+	var resp recordResponse
+	if err := json.Unmarshal(got.body.Bytes(), &resp); err != nil {
 		t.Fatalf("decoding GET body: %v", err)
 	}
-	if fields["full_name"] != "New Person" {
-		t.Errorf("round-tripped full_name = %q, want New Person", fields["full_name"])
+	if resp.Fields["full_name"] != "New Person" {
+		t.Errorf("round-tripped full_name = %q, want New Person", resp.Fields["full_name"])
 	}
 }
 

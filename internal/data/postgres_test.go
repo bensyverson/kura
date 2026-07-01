@@ -149,6 +149,44 @@ func TestPostgresStoreShreddedFieldReadsAsErased(t *testing.T) {
 	}
 }
 
+// UZX: a genuine authentication failure — tampered ciphertext under an
+// intact DEK — stays a hard error on read, distinct from the erased
+// sentinel. The field is neither decrypted nor reported as erased. This is
+// the guard that keeps crypto-shredding (key destroyed, value erased by
+// design) from being confused with corruption (key present, value
+// unreadable), so an attacker cannot pass tampering off as a routine
+// erased read.
+func TestPostgresStoreGenuineDecryptFailureIsHardError(t *testing.T) {
+	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
+	tenant := newTenantID(t, env)
+	id := seedRecord(t, env, tenant, "patient",
+		map[string]string{"full_name": "Jane Doe"},
+		map[string]string{"ssn": "123-45-6789"}, ce)
+
+	// Corrupt the ciphertext at rest while leaving the DEK intact, so the
+	// read reaches decryption and GCM authentication fails — as it would for
+	// tampering or a wrong KEK.
+	raw := rawEncryptedValue(t, env, id, "ssn")
+	tampered := bytes.Clone(raw)
+	tampered[len(tampered)-1] ^= 0xFF
+	if _, err := env.DB.Exec(
+		`UPDATE kura.record_field_values SET value_encrypted = $1 WHERE record_id = $2 AND field_name = 'ssn'`,
+		tampered, id); err != nil {
+		t.Fatalf("corrupting ciphertext: %v", err)
+	}
+
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
+	rec, ok, err := store.Get(context.Background(), "patient", id)
+	if err == nil {
+		t.Fatalf("Get of tampered ciphertext: want a hard error, got ok=%v rec=%+v", ok, rec)
+	}
+	// The failure must never masquerade as erasure.
+	if contains(rec.Erased, "ssn") {
+		t.Errorf("tampered field reported as erased (%v); a genuine decrypt failure must stay an error", rec.Erased)
+	}
+}
+
 // frQ: reads set the tenant GUC, so RLS binds. A store scoped to one
 // tenant cannot see another tenant's records — Get is a not-found and
 // List is empty — while a store scoped to the owning tenant sees them,

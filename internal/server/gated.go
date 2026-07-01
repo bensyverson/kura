@@ -74,7 +74,18 @@ func (h *gatedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeGateError(w, err)
 		return
 	}
-	writeJSON(w, res.Fields)
+	writeJSON(w, recordResponse{Fields: res.Fields, Erased: res.Erased})
+}
+
+// recordResponse is the body of a single-record read: the record's masked
+// fields plus the names of any fields whose per-value DEK was
+// crypto-shredded. A shredded field is omitted from Fields and named in
+// Erased — a normal, non-failing read, never the ciphertext and never an
+// error. Erased is elided when empty, so an ordinary record reads as just
+// its fields.
+type recordResponse struct {
+	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // gatedListHandler serves a bounded, masked page of records. It owns the
@@ -87,11 +98,14 @@ type gatedListHandler struct {
 
 func (*gatedListHandler) gatedThroughCore() {}
 
-// recordJSON is one record in a list response: its id and its masked
-// fields.
+// recordJSON is one record in a list response: its id, its masked fields,
+// and the names of any crypto-shredded fields (see recordResponse). Erased
+// is elided when empty, so a record with nothing erased reads as just its
+// id and fields.
 type recordJSON struct {
 	ID     string            `json:"id"`
 	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // listResponse is the body of a list endpoint: the masked page plus the
@@ -123,7 +137,7 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := listResponse{Records: make([]recordJSON, len(res.Records)), Limit: res.Limit, Offset: res.Offset}
 	for i, rec := range res.Records {
-		out.Records[i] = recordJSON{ID: rec.ID, Fields: rec.Fields}
+		out.Records[i] = recordJSON{ID: rec.ID, Fields: rec.Fields, Erased: rec.Erased}
 	}
 	writeJSON(w, out)
 }

@@ -38,6 +38,10 @@ Every field value the CLI prints has already been masked per the caller's policy
 
 If the agent's policy hides every field on an entity, `kura show` prints an explicit "no fields visible" line rather than an empty record — the empty state is informative, not silent.
 
+### Erased fields
+
+A field whose per-value key was [crypto-shredded](../../concepts/database/#encryption-at-rest) reads back as the sentinel `[erased]` — in both `kura show` and the inline `kura query` list. The value is gone by design, so it renders **distinctly from a masked value** (`[redacted]`) and from a field that was never set (absent entirely): the record still names the field, marked erased, so a reader can tell "erased" from "never had one." A read of a partially erased record is a normal, non-failing operation; only a genuine decrypt failure (tampering or a wrong key) is an error. In `--json`, an erased field is omitted from `fields` and named in the record's `erased` list.
+
 ## Edges: relationships, not traversal
 
 `kura edges` lists a record's relationship [edges](../../concepts/schema-manifest/#how-relationships-are-persisted). The `--direction` is **required** — a caller asks for one view of a record's connections explicitly, never an implied default:
@@ -57,7 +61,7 @@ The stance is that Kura is the access and storage layer; clients orchestrate. Ku
 
 Both verbs follow the shared contract from [CLI output & errors](../cli-output):
 
-- `--json` emits the stable schema (a `{records, limit, offset}` page for query; `{entity, id, fields}` for show; an `{edges: [...]}` list for edges). Markdown is the default.
+- `--json` emits the stable schema (a `{records, limit, offset}` page for query, each record carrying an optional `erased` list; `{entity, id, fields, erased}` for show; an `{edges: [...]}` list for edges). Markdown is the default.
 - `KindUsage` (exit 2) when the positional shape is wrong (no entity, `show`/`edges` missing the id, or `edges` with a missing or invalid `--direction`).
 - `KindNotFound` (exit 4) when `kura show` asks for an id the server does not have.
 - `KindAuth` (exit 3) on 401/403; `KindTransient` (exit 6) on 5xx; everything else falls through `classifyHTTPStatus` to `KindInternal`.
