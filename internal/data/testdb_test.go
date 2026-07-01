@@ -235,6 +235,52 @@ func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encry
 	return id
 }
 
+// freezeEntity marks an entity append-only for tenantID by writing the set
+// directly via the superuser pool (kura_api has no access; the harness
+// stands in for the migrator/owner that writes it in production). Any later
+// UPDATE/DELETE on that entity's records is then rejected by the trigger.
+func freezeEntity(t *testing.T, env testEnv, tenantID, entity string) {
+	t.Helper()
+	if _, err := env.DB.Exec(
+		`INSERT INTO kura.append_only_entities (tenant_id, entity) VALUES ($1, $2)`,
+		tenantID, entity); err != nil {
+		t.Fatalf("freezing entity %q: %v", entity, err)
+	}
+}
+
+// recordRowFingerprint returns a stable string capturing the immutable
+// columns of a record row, so a test can assert erasure left the row
+// byte-for-byte untouched.
+func recordRowFingerprint(t *testing.T, env testEnv, id string) string {
+	t.Helper()
+	var entity string
+	var seq int64
+	var createdAt time.Time
+	if err := env.DB.QueryRow(
+		`SELECT entity, seq, created_at FROM kura.records WHERE id = $1`, id).
+		Scan(&entity, &seq, &createdAt); err != nil {
+		t.Fatalf("fingerprinting record %s: %v", id, err)
+	}
+	return fmt.Sprintf("%s|%d|%s", entity, seq, createdAt.UTC().Format(time.RFC3339Nano))
+}
+
+// attemptRecordUpdate tries to UPDATE a record row within tenantID's scope,
+// returning the error the append-only trigger raises (or nil if none). It
+// sets the tenant GUC transaction-locally so the trigger's tenant-scoped
+// lookup binds, then rolls back — it never actually mutates.
+func attemptRecordUpdate(env testEnv, tenantID, id string) error {
+	tx, err := env.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`SELECT set_config('kura.tenant_id', $1, true)`, tenantID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE kura.records SET updated_at = now() WHERE id = $1`, id)
+	return err
+}
+
 // rawEncryptedValue returns the raw bytea stored for a field, so a test
 // can assert it is genuinely ciphertext and not the plaintext.
 func rawEncryptedValue(t *testing.T, env testEnv, recordID, fieldName string) []byte {
