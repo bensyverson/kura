@@ -114,6 +114,7 @@ the same — authorized and audited by construction.
 | `GET /api/reviews/{id}` | `AdminReview` | admin or auditor |
 | `POST /api/reviews/{id}/decisions` | `AdminManage` | admin |
 | `POST /api/reviews/{id}/complete` | `AdminManage` | admin |
+| `POST /api/erase` | `AdminErase` | admin |
 | `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
@@ -123,6 +124,14 @@ the same — authorized and audited by construction.
   carries a set of role names, and the store applies the whole set or
   none of it. Adding a user to the list and granting them roles are
   *distinct* operations — a role op on a user not on the list is a `404`.
+- **`/api/erase` crypto-shreds records.** It takes a JSON body of
+  `record_ids` and runs through **`Gate.Erase`** — authorized against the
+  `AdminErase` capability (admin only) and audited, one event per record.
+  Erasure destroys the per-value keys, never the rows, so it is compatible
+  with append-only entities and reaches the deny-delete immutable backup;
+  it names records by id and knows nothing of any domain entity. The `kura
+  erase` verb is its remote-first client, and requires `--confirm`. The
+  full mechanism is described in [storage](storage).
 - **`/api/policy` is read-only.** The effective policy is rendered from
   the [Cedar IR](policy); there is no write method on the route, because
   policy authoring stays a repo/PR activity, not a server endpoint.

@@ -54,6 +54,7 @@ func testConfig(t *testing.T, addr string) (Config, *identity.Authenticator) {
 		Records:  records,
 		Writer:   records,
 		Edges:    records,
+		Eraser:   &fakeEraser{},
 		Users:    data.NewMemUserStore(),
 		IdP:      identity.NewFakeDirectory(),
 		Audit:    store,

@@ -32,6 +32,12 @@ const (
 	// AdminReview reads effective policy and surfaces IdP mismatches —
 	// access-review work, so the read-only auditor may do it too.
 	AdminReview AdminAction = "review"
+	// AdminErase crypto-shreds records — the right-to-be-forgotten
+	// operation. Like AdminManage it is the admin role's capability alone:
+	// the read-only auditor may review but never forget. It is a distinct
+	// action so erasure is authorized and audited under its own name,
+	// never conflated with ordinary record management.
+	AdminErase AdminAction = "erase"
 )
 
 // AdminRequest is one administrative request through the gate. Resource
@@ -96,7 +102,7 @@ func (g *Gate) Admin(ctx context.Context, req AdminRequest, do func(context.Cont
 // closed.
 func adminActionAllows(action AdminAction, roles []string) bool {
 	switch action {
-	case AdminManage:
+	case AdminManage, AdminErase:
 		return slices.Contains(roles, roleAdmin)
 	case AdminReview:
 		return slices.Contains(roles, roleAdmin) || slices.Contains(roles, roleAuditor)

@@ -279,6 +279,51 @@ func (h *adminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// eraseBinding translates an authenticated request into a gate
+// EraseRequest and the Eraser that shreds the named records' keys once
+// authorization passes. Like the other bindings it never touches the
+// ResponseWriter: it describes the request and supplies the shred, and
+// the handler renders the outcome.
+type eraseBinding func(r *http.Request, p identity.Principal) (gate.EraseRequest, gate.Eraser, error)
+
+// gatedEraseHandler serves the crypto-shred erasure endpoint. It owns the
+// call to Gate.Erase; the eraseBinding it wraps never touches the
+// ResponseWriter.
+type gatedEraseHandler struct {
+	gate    *gate.Gate
+	binding eraseBinding
+}
+
+func (*gatedEraseHandler) gatedThroughCore() {}
+
+// eraseResponse is the body of a successful erasure: how many wrapped
+// DEKs were destroyed.
+type eraseResponse struct {
+	Shredded int `json:"shredded"`
+}
+
+// ServeHTTP runs the bound erasure request through the gate and writes the
+// shredded count as JSON. The binding only describes the EraseRequest and
+// the Eraser; the gate authorizes the shred, runs it, and audits it.
+func (h *gatedEraseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, eraser, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	res, err := h.gate.Erase(r.Context(), req, eraser)
+	if err != nil {
+		writeGateError(w, err)
+		return
+	}
+	writeJSON(w, eraseResponse{Shredded: res.Shredded})
+}
+
 // writeGateError maps an error from the gate to an HTTP status. A denied
 // request is a 403; an unknown entity, a missing record, or a user not
 // on the authorized list is a 404; anything else is a 500 — the gate
@@ -364,4 +409,14 @@ func (s *Server) registerIngest(pattern string, binding ingestBinding) {
 		s.apiRoutes = make(map[string]gatedRoute)
 	}
 	s.apiRoutes[pattern] = &gatedIngestHandler{gate: s.cfg.Gate, binding: binding}
+}
+
+// registerErase mounts the crypto-shred erasure route under /api/. Like
+// the other registrars it produces a gated handler — a *gatedEraseHandler
+// — so every erasure goes through Gate.Erase by construction.
+func (s *Server) registerErase(pattern string, binding eraseBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &gatedEraseHandler{gate: s.cfg.Gate, binding: binding}
 }

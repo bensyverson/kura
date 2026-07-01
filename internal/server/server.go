@@ -37,7 +37,7 @@ const defaultTokenTTL = 12 * time.Hour
 // collaborator is nil. A server that cannot resolve a token, record an
 // audit event, run a request through the core gate, read a record, or
 // manage the authorized-user list must not come into existence.
-var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a record writer, an edge reader, a user store, an IdP directory, an audit store, a jobs manager, and a review store")
+var ErrMissingDependency = errors.New("server: requires an authenticator, an audit recorder, a google authenticator, the core gate, a record store, a record writer, an edge reader, an eraser, a user store, an IdP directory, an audit store, a jobs manager, and a review store")
 
 // Config is the wiring a Server needs. Addr and the enforcement
 // collaborators (Auth, Recorder, Google) are required; the rest have
@@ -82,6 +82,12 @@ type Config struct {
 	// audits; Edges just supplies the raw edges. In a real deployment it is
 	// the same store instance as Records and Writer. Required.
 	Edges data.EdgeReader
+	// Eraser is the crypto-shred seam the erasure endpoint runs through —
+	// it destroys a set of records' per-value DEKs, never mutating a row.
+	// The gate authorizes (admin only) and audits; Eraser only shreds keys.
+	// In a real deployment it is the same store instance as Records, Writer,
+	// and Edges. Required.
+	Eraser data.Eraser
 	// Users is the authorized-user list and role assignments — the
 	// surface the admin endpoints manage. It is the same store that
 	// resolves roles for the Gate, so management and enforcement never
@@ -148,7 +154,7 @@ type Server struct {
 // that.
 func New(cfg Config) (*Server, error) {
 	if cfg.Auth == nil || cfg.Recorder == nil || cfg.Google == nil ||
-		cfg.Gate == nil || cfg.Records == nil || cfg.Writer == nil || cfg.Edges == nil || cfg.Users == nil || cfg.IdP == nil ||
+		cfg.Gate == nil || cfg.Records == nil || cfg.Writer == nil || cfg.Edges == nil || cfg.Eraser == nil || cfg.Users == nil || cfg.IdP == nil ||
 		cfg.Audit == nil || cfg.Jobs == nil || cfg.Reviews == nil {
 		return nil, ErrMissingDependency
 	}
@@ -169,6 +175,7 @@ func New(cfg Config) (*Server, error) {
 	s.http = &http.Server{}
 	s.registerEntityRoutes()
 	s.registerAdminRoutes()
+	s.registerEraseRoute()
 	s.registerOverviewRoute()
 	s.registerManifestRoute()
 	s.registerReviewRoutes()

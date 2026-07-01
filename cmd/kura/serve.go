@@ -286,6 +286,13 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	if !ok {
 		return server.Config{}, fmt.Errorf("serve: record store %T does not read relationship edges", records)
 	}
+	// The record store is also the eraser — both the Postgres store and the
+	// in-memory store implement Eraser — so the erasure endpoint shreds keys
+	// through the same instance the gate enforces against.
+	eraser, ok := records.(data.Eraser)
+	if !ok {
+		return server.Config{}, fmt.Errorf("serve: record store %T does not support crypto-shred erasure", records)
+	}
 
 	// The jobs ledger shares the same pool as the data stores. The backup
 	// Service is wired here when KURA_DO_SPACES_ENDPOINT is configured;
@@ -324,6 +331,7 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		Records: records,
 		Writer:  writer,
 		Edges:   edges,
+		Eraser:  eraser,
 		Users:   users,
 		// IdP is the vendor Directory paired with the sign-in IdP:
 		// googleDirectory for Google, microsoftDirectory for Entra,

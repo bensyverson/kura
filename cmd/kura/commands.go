@@ -56,6 +56,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newShowCmd())
 	cmd.AddCommand(newEdgesCmd())
 	cmd.AddCommand(newIngestCmd())
+	cmd.AddCommand(newEraseCmd())
 	cmd.AddCommand(newLogCmd())
 	cmd.AddCommand(newTailCmd())
 	cmd.AddCommand(newJobsCmd())
@@ -70,6 +71,12 @@ func newRootCmd() *cobra.Command {
 	// their build-plan phases land. `kura agent-context` lives here so it
 	// can introspect the fully-built root via a closure capture.
 	for _, op := range buildRegistry(cmd).All() {
+		// A declaration-only op (nil Handler) is projected onto
+		// agent-context and MCP but has its CLI command wired by hand
+		// elsewhere — skip it so it is not double-registered as a stub.
+		if op.Handler == nil {
+			continue
+		}
 		cmd.AddCommand(cobraCommand(op))
 	}
 
