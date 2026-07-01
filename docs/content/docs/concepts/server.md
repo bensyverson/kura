@@ -1,6 +1,6 @@
 ---
 title: The HTTP API server
-weight: 11
+weight: 12
 ---
 
 `kura serve` runs the remote HTTP API — **Kura's only public surface**. It

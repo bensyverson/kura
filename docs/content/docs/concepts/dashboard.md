@@ -1,6 +1,6 @@
 ---
 title: The local dashboard
-weight: 12
+weight: 13
 ---
 
 `kura dashboard` runs a **local** web app — bound to loopback on the

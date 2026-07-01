@@ -15,6 +15,8 @@ How agents and other programs talk to Kura: the HTTP API exposed by `kura serve`
   {{< card link="cli-audit" title="CLI audit verbs" subtitle="kura log / kura tail — filterable audit query and live NDJSON streaming." >}}
   {{< card link="cli-jobs" title="CLI jobs verbs" subtitle="kura jobs list/get and --wait — the durable, idempotent async-ops ledger." >}}
   {{< card link="cli-backup-restore" title="CLI backup & restore" subtitle="kura backup / kura restore — async, encrypted, append-only, admin-gated." >}}
+  {{< card link="cli-erase" title="CLI erase" subtitle="kura erase — crypto-shred records: destroy the keys, never the rows; admin-gated, per-record audited." >}}
+  {{< card link="cli-rotate-kek" title="CLI KEK rotation" subtitle="kura rotate-kek — resumable, batched KEK-only re-wrap of the key store." >}}
   {{< card link="cli-smoke" title="CLI smoke verb" subtitle="kura smoke — the end-to-end health gate for CI, staging, and provisioning." >}}
 {{< /cards >}}
 

@@ -195,23 +195,19 @@ dead code.
 
 Field values are stored in `record_field_values` as either a plain scalar
 (`value_text`) or ciphertext (`value_encrypted`) — a `CHECK` constraint enforces
-exactly one. Two kinds of value are encrypted:
-
-- **High-sensitivity categories** — account numbers, government IDs, medical record
-  numbers, biometrics, secrets — get field-level encryption.
-- **Free-text columns** are encrypted by default, since free text is assumed to
-  contain PII.
+exactly one. Content is **encrypted by default**: a value is stored as plaintext only
+when its field type is *structural* (`integer`, `boolean`, `timestamp`); `string` and
+`text` are encrypted.
 
 Encryption is **application-layer**, not in-database. Each encrypted value is sealed
 in Go with AES-256-GCM (`internal/crypto`) under its own per-value data-encryption key
 (DEK); the DEK is wrapped under a master KEK and held in a physically separate,
 erasable key store (`internal/keystore`), never beside the ciphertext. This is what
 makes erasure a **crypto-shred** — destroy the key, and the ciphertext is permanently
-opaque in every copy including immutable backups, without mutating the record. See
-[ADR 0002](https://github.com/bensyverson/kura/blob/main/docs/decisions/0002-erasable-key-store-for-field-encryption.md)
-for the design; pgcrypto was dropped (migration `0010`) once crypto moved to the
-application. A value whose DEK has been shredded reads back as *erased*, not as
-ciphertext or an error.
+opaque in every copy including immutable backups, without mutating the record. A value
+whose DEK has been shredded reads back as *erased*, not as ciphertext or an error.
+See **[Field encryption & crypto-shredding](../encryption/)** for the full model —
+the envelope, the erasable key store, erase semantics, KEK rotation, and configuration.
 
 ## Reading records: the RecordStore
 

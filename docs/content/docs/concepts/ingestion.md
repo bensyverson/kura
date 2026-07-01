@@ -1,6 +1,6 @@
 ---
 title: Record ingestion
-weight: 13
+weight: 14
 ---
 
 Ingestion is how a client's existing data gets **into** Kura. Every
