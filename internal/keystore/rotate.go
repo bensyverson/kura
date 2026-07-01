@@ -13,7 +13,11 @@ import "context"
 // Rotation is bound by key-store write throughput, not compute, so the batch
 // is the unit of durable progress; a batchSize below 1 is raised to 1 so the
 // loop always makes progress rather than spinning.
-func Rotate(ctx context.Context, store KeyStore, tenantID string, fromVersion, toVersion, batchSize int, rewrap Rewrap) (int, error) {
+//
+// progress, if non-nil, is called after each committed batch with that batch's
+// row count and the running total, so a long-running rotation can report
+// visible progress to an operator.
+func Rotate(ctx context.Context, store KeyStore, tenantID string, fromVersion, toVersion, batchSize int, rewrap Rewrap, progress func(batch, total int)) (int, error) {
 	if batchSize < 1 {
 		batchSize = 1
 	}
@@ -23,9 +27,12 @@ func Rotate(ctx context.Context, store KeyStore, tenantID string, fromVersion, t
 		if err != nil {
 			return total, err
 		}
-		total += n
 		if n == 0 {
 			return total, nil
+		}
+		total += n
+		if progress != nil {
+			progress(n, total)
 		}
 	}
 }

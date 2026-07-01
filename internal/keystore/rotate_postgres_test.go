@@ -79,7 +79,7 @@ func TestPostgresRotateReWrapsInPlace(t *testing.T) {
 		t.Fatalf("pre-rotation kek_version = %d, want 1", kekVersion(t, pool, k1))
 	}
 
-	rotated, err := keystore.Rotate(ctx, ks, tenant, 1, 2, 10, rewrapVia(oldW, newW))
+	rotated, err := keystore.Rotate(ctx, ks, tenant, 1, 2, 10, rewrapVia(oldW, newW), nil)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestPostgresRotateIsResumable(t *testing.T) {
 	}
 
 	// Resume: the driver finishes the remaining three.
-	rest, err := keystore.Rotate(ctx, ks, tenant, 1, 2, 2, rw)
+	rest, err := keystore.Rotate(ctx, ks, tenant, 1, 2, 2, rw, nil)
 	if err != nil {
 		t.Fatalf("resumed Rotate: %v", err)
 	}

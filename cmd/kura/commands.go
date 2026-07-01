@@ -57,6 +57,7 @@ func newRootCmd() *cobra.Command {
 	cmd.AddCommand(newEdgesCmd())
 	cmd.AddCommand(newIngestCmd())
 	cmd.AddCommand(newEraseCmd())
+	cmd.AddCommand(newRotateKEKCmd())
 	cmd.AddCommand(newLogCmd())
 	cmd.AddCommand(newTailCmd())
 	cmd.AddCommand(newJobsCmd())

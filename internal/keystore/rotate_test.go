@@ -87,7 +87,7 @@ func TestRotateReWrapsSoValuesDecryptUnderTheNewKEK(t *testing.T) {
 	store := keystore.NewFake()
 	seeds := seedValues(t, ctx, store, "t1", 3, oldW)
 
-	rotated, err := keystore.Rotate(ctx, store, "t1", 1, 2, 2, rewrapVia(oldW, newW))
+	rotated, err := keystore.Rotate(ctx, store, "t1", 1, 2, 2, rewrapVia(oldW, newW), nil)
 	if err != nil {
 		t.Fatalf("Rotate: %v", err)
 	}
@@ -141,7 +141,7 @@ func TestRotateIsResumableAcrossInterruptions(t *testing.T) {
 	}
 
 	// Re-invoking the driver finishes exactly the remaining three.
-	rest, err := keystore.Rotate(ctx, store, "t1", 1, 2, 2, rw)
+	rest, err := keystore.Rotate(ctx, store, "t1", 1, 2, 2, rw, nil)
 	if err != nil {
 		t.Fatalf("resumed Rotate: %v", err)
 	}
