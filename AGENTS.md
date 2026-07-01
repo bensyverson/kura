@@ -20,7 +20,7 @@ The product is `internal/` — the core enforcement library (Cedar authorization
 
 ## CLI conventions
 
-- **Open with `job status`.** At session start, `job status` (no arg) is both the identity check and the landscape briefing.
+- **Open by running `job orient` (standalone tool, no arguments).** At session start, `job orient` is the landscape briefing.
 
 ## General
 
