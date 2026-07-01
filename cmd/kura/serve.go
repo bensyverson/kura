@@ -13,7 +13,6 @@ import (
 	"github.com/bensyverson/kura/internal/audit"
 	"github.com/bensyverson/kura/internal/backup"
 	"github.com/bensyverson/kura/internal/cedar"
-	"github.com/bensyverson/kura/internal/crypto"
 	"github.com/bensyverson/kura/internal/data"
 	"github.com/bensyverson/kura/internal/db"
 	"github.com/bensyverson/kura/internal/gate"
@@ -418,31 +417,21 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 		return nil, nil, nil, nil, err
 	}
 	// The master KEK wraps every per-value DEK. It is sourced from the secrets
-	// manager under secrets.EncryptionKeyName (Doppler in production, the
-	// process environment on the dev/bare path) — never a bare env read in the
-	// data path. It is a base64-encoded 32-byte AES-256 key (openssl rand
+	// manager (Doppler in production, the process environment on the dev/bare
+	// path) — never a bare env read in the data path. The write path seals
+	// under the active generation via a key ring; during a rotation the ring
+	// also holds the retiring generation so the read path can open rows not
+	// yet re-wrapped. Keys are base64-encoded 32-byte AES-256 (openssl rand
 	// -base64 32); the data layer receives only the wrap/unwrap capability,
-	// never the raw key, keeping the KEK's blast radius small. A missing or
-	// malformed KEK is a fail-fast startup error, not a silent weakening of
-	// encryption.
+	// never the raw key. A missing or malformed KEK is a fail-fast startup
+	// error, not a silent weakening of encryption.
 	backend, err := buildSecretsBackend(getenv)
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	kekEncoded, err := backend.Fetch(context.Background(), secrets.EncryptionKeyName)
+	keyring, err := buildKeyRing(context.Background(), backend, getenv)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("serve: sourcing %s from the secrets manager: %w", secrets.EncryptionKeyName, err)
-	}
-	wrapper, err := crypto.NewKeyWrapperFromBase64(kekEncoded)
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("serve: %s: %w", secrets.EncryptionKeyName, err)
-	}
-	// The write path seals under the active KEK generation via a key ring. A
-	// single generation (v1) covers steady state; a rotation loads the
-	// retiring generation alongside it (wired in the rotation runtime step).
-	keyring, err := crypto.NewKeyRing(1, map[int]crypto.Wrapper{1: wrapper})
-	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("serve: building key ring: %w", err)
+		return nil, nil, nil, nil, err
 	}
 	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
 	if err != nil {
