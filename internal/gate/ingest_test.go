@@ -12,10 +12,12 @@ import (
 	"github.com/bensyverson/kura/internal/pii"
 )
 
-// ingestManifest declares a patient with: a person name (low-sensitivity
-// PII), an account number (high-sensitivity PII), a free-text notes field,
-// and an untagged nickname. The four fields exercise every encryption
-// rule: declared high-sensitivity, free-text, scanner-detected, and none.
+// ingestManifest declares a patient whose fields span the encrypt-by-default
+// boundary (D2): content types (string, text) encrypt regardless of PII
+// tagging, while structural types (integer, boolean, timestamp) stay
+// plaintext. full_name (low-sensitivity PII) and nickname (untagged) prove
+// that content encrypts independent of any sensitivity judgment; visit_count,
+// active, and admitted_at prove the structural opt-out.
 func ingestManifest() *manifest.Manifest {
 	return &manifest.Manifest{
 		Version: "1",
@@ -26,6 +28,9 @@ func ingestManifest() *manifest.Manifest {
 				{Name: "account", Type: manifest.FieldString, PII: new(pii.CategoryAccountNumber)},
 				{Name: "notes", Type: manifest.FieldText},
 				{Name: "nickname", Type: manifest.FieldString},
+				{Name: "visit_count", Type: manifest.FieldInteger},
+				{Name: "active", Type: manifest.FieldBoolean},
+				{Name: "admitted_at", Type: manifest.FieldTimestamp},
 			},
 		}},
 	}
@@ -127,11 +132,38 @@ func TestIngestRunsTheFullChainForAnAuthorizedAdmin(t *testing.T) {
 	}
 }
 
-// The gate classifies which fields are stored encrypted: a declared
-// high-sensitivity field (account) and a free-text field (notes) are
-// encrypted; a low-sensitivity declared field (full_name) and a plain
-// untagged field with no detected PII (nickname) are not.
-func TestIngestClassifiesEncryptionFromTheManifest(t *testing.T) {
+// storedEncrypted is type-driven (D2): content fields (string, text) encrypt
+// by default and structural fields (integer, boolean, timestamp) stay
+// plaintext — the opt-out is the type, never a sensitivity judgment, so a
+// no-PII string and a high-sensitivity string both encrypt.
+func TestStoredEncryptedIsTypeDriven(t *testing.T) {
+	cases := []struct {
+		name  string
+		field manifest.Field
+		want  bool
+	}{
+		{"plain string encrypts", manifest.Field{Type: manifest.FieldString}, true},
+		{"high-sensitivity string encrypts", manifest.Field{Type: manifest.FieldString, PII: new(pii.CategoryAccountNumber)}, true},
+		{"free text encrypts", manifest.Field{Type: manifest.FieldText}, true},
+		{"integer stays plaintext", manifest.Field{Type: manifest.FieldInteger}, false},
+		{"boolean stays plaintext", manifest.Field{Type: manifest.FieldBoolean}, false},
+		{"timestamp stays plaintext", manifest.Field{Type: manifest.FieldTimestamp}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := storedEncrypted(tc.field); got != tc.want {
+				t.Errorf("storedEncrypted(%s) = %v, want %v", tc.field.Type, got, tc.want)
+			}
+		})
+	}
+}
+
+// End to end, the gate encrypts content fields by default and leaves only
+// structural fields plaintext: account/notes/full_name/nickname (string and
+// text) all encrypt — full_name and nickname included, proving the decision
+// is decoupled from sensitivity — while visit_count/active/admitted_at
+// (integer, boolean, timestamp) stay plaintext.
+func TestIngestEncryptsContentFieldsByDefault(t *testing.T) {
 	detector := pii.NewFakeDetector().Register("Jane Doe", pii.CategoryPerson, 0.99)
 	h := newIngestHarness(t, detector)
 	tok := h.token(t, "alice", "admin")
@@ -141,17 +173,23 @@ func TestIngestClassifiesEncryptionFromTheManifest(t *testing.T) {
 		Token:  tok,
 		Entity: "patient",
 		Fields: map[string]string{
-			"full_name": "Jane Doe",
-			"account":   "ACCT-555",
-			"notes":     "no pii here",
-			"nickname":  "JD",
+			"full_name":   "Jane Doe",
+			"account":     "ACCT-555",
+			"notes":       "no pii here",
+			"nickname":    "JD",
+			"visit_count": "3",
+			"active":      "true",
+			"admitted_at": "2026-01-02T15:04:05Z",
 		},
 	}, existsNone, write)
 	if err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
 	rec := *got
-	cases := map[string]bool{"account": true, "notes": true, "full_name": false, "nickname": false}
+	cases := map[string]bool{
+		"account": true, "notes": true, "full_name": true, "nickname": true,
+		"visit_count": false, "active": false, "admitted_at": false,
+	}
 	for name, wantEnc := range cases {
 		f, ok := fieldByName(rec, name)
 		if !ok {
@@ -161,32 +199,6 @@ func TestIngestClassifiesEncryptionFromTheManifest(t *testing.T) {
 		if f.Encrypted != wantEnc {
 			t.Errorf("field %q Encrypted = %v, want %v", name, f.Encrypted, wantEnc)
 		}
-	}
-}
-
-// Scanner-detected high-sensitivity PII in a field the manifest did not tag
-// forces that field to be stored encrypted — defense against PII landing in
-// a plaintext column the schema author did not expect.
-func TestIngestEncryptsScannerDetectedHighSensitivity(t *testing.T) {
-	detector := pii.NewFakeDetector().Register("SECRET-XYZ", pii.CategorySecret, 0.97)
-	h := newIngestHarness(t, detector)
-	tok := h.token(t, "alice", "admin")
-	write, got := captureWriter("rec-1")
-
-	_, err := h.gate.Ingest(context.Background(), IngestRequest{
-		Token:  tok,
-		Entity: "patient",
-		Fields: map[string]string{"nickname": "SECRET-XYZ"},
-	}, existsNone, write)
-	if err != nil {
-		t.Fatalf("Ingest: %v", err)
-	}
-	f, ok := fieldByName(*got, "nickname")
-	if !ok {
-		t.Fatal("nickname missing from WriteRecord")
-	}
-	if !f.Encrypted {
-		t.Error("nickname holding a detected secret was not stored encrypted")
 	}
 }
 

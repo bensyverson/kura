@@ -250,7 +250,7 @@ func classifyRecord(e *manifest.Entity, fields map[string]string, spansByField m
 			Name:      f.Name,
 			Type:      string(f.Type),
 			Value:     val,
-			Encrypted: storedEncrypted(f, spansByField[f.Name]),
+			Encrypted: storedEncrypted(f),
 		})
 	}
 	for _, f := range e.Fields {
@@ -268,22 +268,20 @@ func classifyRecord(e *manifest.Entity, fields map[string]string, spansByField m
 }
 
 // storedEncrypted decides whether a field's value is stored encrypted at
-// rest. A value warrants field-level encryption when it is free-text
-// (which can hold anything), when the manifest declares it a
-// high-sensitivity category, or when the ingestion scan detected a
-// high-sensitivity category in it — the last catching PII the schema
-// author did not anticipate in an otherwise-plain field.
-func storedEncrypted(f manifest.Field, spans []pii.Span) bool {
-	if f.Type == manifest.FieldText {
+// rest. Content is encrypted by default (D2): every field encrypts unless
+// its type is structural — integer, boolean, or timestamp — which hold
+// non-content values that carry no PII. The record sequence (seq) is a
+// system column, never a field value, so it is structurally plaintext by
+// construction and not enumerated here. The opt-out is purely the type,
+// never a sensitivity or visibility judgment: shreddability is decoupled
+// from sensitivity, so a plain string and a high-sensitivity string alike
+// encrypt. Defaulting to encrypt also fails closed — a field type added
+// later encrypts until it is deliberately classified structural.
+func storedEncrypted(f manifest.Field) bool {
+	switch f.Type {
+	case manifest.FieldInteger, manifest.FieldBoolean, manifest.FieldTimestamp:
+		return false
+	default:
 		return true
 	}
-	if f.PII != nil && f.PII.HighSensitivity() {
-		return true
-	}
-	for _, sp := range spans {
-		if sp.Category.HighSensitivity() {
-			return true
-		}
-	}
-	return false
 }

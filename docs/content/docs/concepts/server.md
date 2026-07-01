@@ -68,9 +68,10 @@ exist at all — exactly right for a server that has no schema yet.
 
 - **The POST route is the write half**, covered in full by
   [Record ingestion](ingestion): it authorizes the `create`, validates the
-  body against the manifest, scans for PII, encrypts high-sensitivity and
-  free-text fields, and persists — the symmetric counterpart to the masked
-  read. `kura ingest` is the bulk-import CLI over it.
+  body against the manifest, scans for PII, encrypts content fields by
+  default (everything but the structural types), and persists — the
+  symmetric counterpart to the masked read. `kura ingest` is the bulk-import
+  CLI over it.
 
 - **Every response is masked** by the gate, per the requesting
   principal's policy. The server never sees unmasked data: the binding
