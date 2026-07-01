@@ -24,6 +24,19 @@ import (
 // addressable home and could never be fetched or shredded precisely.
 var ErrIncompleteKey = errors.New("keystore: key needs tenant, record, and field")
 
+// ErrInvalidRotation is returned when a rotation does not advance the KEK
+// version — a toVersion at or below fromVersion. Rotation must move rows
+// forward; a non-advancing rotation is a misconfiguration, never a silent
+// no-op that could leave the operator believing keys were re-wrapped.
+var ErrInvalidRotation = errors.New("keystore: rotation must advance the kek version")
+
+// Rewrap re-seals a wrapped DEK: it unwraps under the retiring KEK and
+// re-wraps under the incoming one, returning new wrapped bytes for the same
+// DEK. Rotation calls it per row. The keystore holds no KEK material — the
+// caller composes Rewrap from its wrap/unwrap capabilities — so the master
+// key's blast radius on rotation is as small as it is on the write path.
+type Rewrap func(oldWrapped []byte) (newWrapped []byte, err error)
+
 // Key identifies one wrapped DEK by the field value it protects, scoped to a
 // tenant. It mirrors the identity of a kura.record_field_values row —
 // (tenant_id, record_id, field_name) — so there is exactly one DEK per
@@ -60,4 +73,18 @@ type KeyStore interface {
 	// expressed over record ids — a domain-agnostic set — never over any
 	// subject concept.
 	Shred(ctx context.Context, tenantID string, recordIDs []string) (deleted int, err error)
+
+	// RotateBatch re-wraps up to limit wrapped DEKs currently at fromVersion
+	// within tenantID, advancing each to toVersion. For every selected row it
+	// calls rewrap on the stored wrapped DEK and persists the result with
+	// kek_version = toVersion, atomically, so a row is either fully advanced
+	// or untouched. It returns how many rows were rotated; zero means no rows
+	// remain at fromVersion. Rotation touches only the wrapping, never the
+	// DEK, so ciphertext stays decryptable and byte-for-byte unchanged.
+	//
+	// Selecting strictly on fromVersion makes rotation resumable and
+	// idempotent: a re-run after an interruption re-selects only the
+	// not-yet-advanced rows and never double-wraps one already at toVersion.
+	// A toVersion at or below fromVersion is ErrInvalidRotation.
+	RotateBatch(ctx context.Context, tenantID string, fromVersion, toVersion, limit int, rewrap Rewrap) (rotated int, err error)
 }

@@ -102,6 +102,82 @@ func (s *PostgresStore) Shred(ctx context.Context, tenantID string, recordIDs []
 	return int(deleted), nil
 }
 
+// RotateBatch re-wraps up to limit wrapped DEKs at fromVersion within
+// tenantID, advancing each to toVersion. It selects the batch FOR UPDATE SKIP
+// LOCKED — so a second rotator process contends for different rows rather than
+// blocking — re-wraps each stored wrapped DEK via rewrap, and updates it with
+// kek_version = toVersion, all in one tenant-scoped transaction. The UPDATE is
+// guarded by kek_version = fromVersion, so a row another runner advanced
+// concurrently is left alone: no double-wrap, no lost update. The whole batch
+// commits or rolls back together, keeping progress consistent with the
+// returned count.
+func (s *PostgresStore) RotateBatch(ctx context.Context, tenantID string, fromVersion, toVersion, limit int, rewrap Rewrap) (int, error) {
+	if toVersion <= fromVersion {
+		return 0, ErrInvalidRotation
+	}
+	if limit < 1 {
+		limit = 1
+	}
+	rotated := 0
+	err := s.inTenantTx(ctx, tenantID, false, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx,
+			`SELECT record_id::text, field_name, wrapped_dek FROM kura.wrapped_deks
+			 WHERE tenant_id::text = $1 AND kek_version = $2
+			 ORDER BY record_id, field_name
+			 LIMIT $3
+			 FOR UPDATE SKIP LOCKED`,
+			tenantID, fromVersion, limit)
+		if err != nil {
+			return err
+		}
+		type pending struct {
+			recordID  string
+			fieldName string
+			wrapped   []byte
+		}
+		var batch []pending
+		for rows.Next() {
+			var p pending
+			if err := rows.Scan(&p.recordID, &p.fieldName, &p.wrapped); err != nil {
+				rows.Close()
+				return err
+			}
+			batch = append(batch, p)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return err
+		}
+		// Close the cursor before issuing UPDATEs on the same transaction; the
+		// FOR UPDATE row locks are held until commit regardless.
+		rows.Close()
+
+		for _, p := range batch {
+			newWrapped, err := rewrap(p.wrapped)
+			if err != nil {
+				return fmt.Errorf("keystore: re-wrapping DEK for record %s field %s: %w", p.recordID, p.fieldName, err)
+			}
+			res, err := tx.ExecContext(ctx,
+				`UPDATE kura.wrapped_deks SET wrapped_dek = $4, kek_version = $5
+				 WHERE tenant_id::text = $1 AND record_id::text = $2 AND field_name = $3 AND kek_version = $6`,
+				tenantID, p.recordID, p.fieldName, newWrapped, toVersion, fromVersion)
+			if err != nil {
+				return err
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				return err
+			}
+			rotated += int(n)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return rotated, nil
+}
+
 // inTenantTx runs fn inside a transaction scoped to tenantID via the
 // kura.tenant_id GUC (transaction-local, so it cannot leak onto another
 // pooled connection). It mirrors the record store's tenant-tx helper; the
