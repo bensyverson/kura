@@ -67,6 +67,7 @@ func overviewServer(t *testing.T) (srv *Server, records *data.MemStore, auditSto
 	cfg.IdP = idp
 	records = data.NewMemStore()
 	cfg.Records = records
+	cfg.Edges = records
 	cfg.Recorder = recorder
 	cfg.Audit = auditStore
 	srv, err = New(cfg)

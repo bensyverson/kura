@@ -16,6 +16,14 @@ import (
 // code change or a redeploy.
 const EncryptionKeyName = "FIELD_ENCRYPTION_KEY"
 
+// EncryptionKeyRetiringName is the secret name under which the outgoing
+// field-encryption KEK lives during a KEK rotation. It is loaded alongside
+// EncryptionKeyName (the incoming/active key) only while a rotation is in
+// flight — the operator declares the rotation via KURA_KEK_RETIRING_VERSION —
+// so the read path can still open rows not yet re-wrapped under the new key.
+// Outside a rotation it is unset and only the active key is loaded.
+const EncryptionKeyRetiringName = "FIELD_ENCRYPTION_KEY_RETIRING"
+
 // BackupEncryptionKeyName is the secret name for the key that encrypts
 // logical backup dumps. It is deliberately distinct from
 // EncryptionKeyName: the independent backup tier earns its

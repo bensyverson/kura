@@ -1,6 +1,7 @@
 package manifest
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -59,6 +60,56 @@ func TestRelationshipsResolve(t *testing.T) {
 	target, ok := m.Entity(rel.Target)
 	if !ok || target.Name != "order" {
 		t.Errorf("customer.orders did not resolve to the order entity")
+	}
+}
+
+// "append-only round-trips" — an entity can declare append_only, the flag
+// survives a parse → marshal → parse round-trip, and an append-only entity
+// may both declare its own relationships and be the target of another
+// entity's relationship (append-only events get referenced).
+func TestAppendOnlyRoundTrips(t *testing.T) {
+	m, err := ParseFile("testdata/valid.json")
+	if err != nil {
+		t.Fatalf("valid manifest failed to parse: %v", err)
+	}
+
+	order, ok := m.Entity("order")
+	if !ok {
+		t.Fatal(`Entity("order") not found`)
+	}
+	if !order.AppendOnly {
+		t.Errorf("order should be append_only")
+	}
+
+	cust, ok := m.Entity("customer")
+	if !ok {
+		t.Fatal(`Entity("customer") not found`)
+	}
+	if cust.AppendOnly {
+		t.Errorf("customer should not be append_only (omitempty default)")
+	}
+
+	// An append-only entity may declare its own relationships...
+	if len(order.Relationships) != 1 {
+		t.Errorf("append-only order should still declare its relationship, got %d", len(order.Relationships))
+	}
+	// ...and be the target of another entity's relationship.
+	if cust.Relationships[0].Target != "order" {
+		t.Errorf("append-only order should be a valid relationship target")
+	}
+
+	// The flag survives a JSON round-trip.
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	m2, err := Parse(data)
+	if err != nil {
+		t.Fatalf("re-parse: %v", err)
+	}
+	order2, _ := m2.Entity("order")
+	if !order2.AppendOnly {
+		t.Errorf("append_only did not survive the round-trip")
 	}
 }
 

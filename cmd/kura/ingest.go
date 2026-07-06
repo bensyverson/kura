@@ -24,12 +24,21 @@ func newIngestCmd() *cobra.Command {
 		Short: "Ingest records into an entity through the remote kura serve",
 		Long: `Ingest records into a manifest entity through the remote kura serve.
 
-Records are read as JSON — a single object, or an array of objects — from
-a file (--file) or from stdin. Field values are strings. Each record is
-written through the server's ingestion endpoint, which authorizes the
-write, validates the fields against the schema manifest, scans for PII,
-and encrypts high-sensitivity and free-text fields at rest. The new
-record ids are reported.`,
+Records are read as JSON — a single record, or an array of records — from
+a file (--file) or from stdin. Each record is an object of the form:
+
+    {"fields": {"name": "value", ...},
+     "relationships": {"relationship_name": ["target-id", ...]}}
+
+Field values are strings. "relationships" is optional: it maps a
+relationship the manifest declares on the entity to the ids of the target
+records it points at — a "one" relationship takes a single id, a "many"
+relationship takes several. Relationships are supplied only at creation.
+
+Each record is written through the server's ingestion endpoint, which
+authorizes the write, validates the fields and relationships against the
+schema manifest, scans for PII, and encrypts high-sensitivity and
+free-text fields at rest. The new record ids are reported.`,
 		RunE: ingestRun,
 	}
 	cmd.Flags().String("file", "", "path to a JSON file of records; reads stdin when omitted")
@@ -104,33 +113,44 @@ func readIngestInput(cmd *cobra.Command) ([]byte, error) {
 	return b, nil
 }
 
-// parseIngestRecords accepts either a single JSON object or an array of
-// objects, normalizing both to a slice of field maps. Values are strings —
-// the storage layer keeps field values as text.
-func parseIngestRecords(raw []byte) ([]map[string]string, error) {
+// ingestRecord is one record to create: its field values and, optionally,
+// the relationship edges to create with it. It mirrors the server's
+// ingestion body — fields, plus relationships keyed by the relationship name
+// declared on the entity to the ids of the target records it points at. The
+// relationships are omitted when the record has none.
+type ingestRecord struct {
+	Fields        map[string]string   `json:"fields"`
+	Relationships map[string][]string `json:"relationships,omitempty"`
+}
+
+// parseIngestRecords accepts either a single JSON record or an array of
+// records, normalizing both to a slice. Each record is {fields, relationships}
+// — field values are strings (the storage layer keeps them as text), and
+// relationships are supplied at creation, the only point edges are written.
+func parseIngestRecords(raw []byte) ([]ingestRecord, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, fmt.Errorf("input is empty")
 	}
 	if trimmed[0] == '[' {
-		var arr []map[string]string
+		var arr []ingestRecord
 		if err := json.Unmarshal(trimmed, &arr); err != nil {
 			return nil, fmt.Errorf("parsing JSON array of records: %w", err)
 		}
 		return arr, nil
 	}
-	var one map[string]string
+	var one ingestRecord
 	if err := json.Unmarshal(trimmed, &one); err != nil {
 		return nil, fmt.Errorf("parsing JSON record: %w", err)
 	}
-	return []map[string]string{one}, nil
+	return []ingestRecord{one}, nil
 }
 
 // postRecord POSTs one record to /api/{entity} with the bearer token and
 // returns the new record's id. A non-201 is classified through the shared
 // HTTP-status taxonomy.
-func postRecord(cmd *cobra.Command, server, entity, token string, fields map[string]string) (string, error) {
-	body, err := json.Marshal(fields)
+func postRecord(cmd *cobra.Command, server, entity, token string, rec ingestRecord) (string, error) {
+	body, err := json.Marshal(rec)
 	if err != nil {
 		return "", clio.InternalError("ingest", "encoding record: %w", err)
 	}

@@ -41,15 +41,22 @@ type AccessRequest struct {
 // Fetcher performs the actual data read. The gate invokes it only after
 // authorization passes, and masks whatever it returns before any caller
 // sees it — so a Fetcher cannot be a way around the gate. It returns the
-// record as a field-name-to-value map.
-type Fetcher func(ctx context.Context) (map[string]string, error)
+// record — its field values plus the names of any fields whose per-value
+// DEK has been crypto-shredded (see Record.Erased). A shredded field is a
+// normal, non-failing read; a genuine decrypt failure is an error the
+// Fetcher returns, which the gate propagates rather than masks.
+type Fetcher func(ctx context.Context) (Record, error)
 
 // AccessResult is what a caller gets back from a successful Access: the
 // resolved principal and the record, with every PII span the
-// authorization decision did not make visible already redacted.
+// authorization decision did not make visible already redacted. Erased
+// names the record's crypto-shredded fields, carried through unchanged —
+// masking never touches them, because a shredded field is absent from
+// Fields to begin with.
 type AccessResult struct {
 	Principal identity.Principal
 	Fields    map[string]string
+	Erased    []string
 }
 
 // Gate is the single core enforcement entrypoint. Every adapter — the
@@ -114,13 +121,13 @@ func (g *Gate) Access(ctx context.Context, req AccessRequest, fetch Fetcher) (Ac
 	}
 
 	// 3. Access.
-	fields, err := fetch(ctx)
+	rec, err := fetch(ctx)
 	if err != nil {
 		return AccessResult{}, fmt.Errorf("gate: data access: %w", err)
 	}
 
 	// 4. Mask.
-	masked, err := g.mask(ctx, fields, decision)
+	masked, err := g.mask(ctx, rec.Fields, decision)
 	if err != nil {
 		return AccessResult{}, err
 	}
@@ -130,7 +137,7 @@ func (g *Gate) Access(ctx context.Context, req AccessRequest, fetch Fetcher) (Ac
 		return AccessResult{}, fmt.Errorf("gate: recording access: %w", err)
 	}
 
-	return AccessResult{Principal: principal, Fields: masked}, nil
+	return AccessResult{Principal: principal, Fields: masked, Erased: rec.Erased}, nil
 }
 
 // authenticate resolves token to a principal and records the

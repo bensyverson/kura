@@ -29,12 +29,16 @@ type ListRequest struct {
 	Offset int
 }
 
-// Record is one record in a list result: its id and its field values.
-// The fields are masked by the time a caller sees them, exactly as a
-// single Access result is.
+// Record is one record read through the gate: its id, its field values,
+// and the names of any fields whose per-value DEK has been crypto-shredded.
+// The fields are masked by the time a caller sees them. Erased is carried
+// through unchanged — a shredded field is absent from Fields, so masking
+// has nothing to touch — letting a caller tell an erased field (key
+// destroyed by design) apart from one that was never set.
 type Record struct {
 	ID     string
 	Fields map[string]string
+	Erased []string
 }
 
 // ListFetcher reads a bounded page of records. The gate invokes it only

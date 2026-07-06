@@ -1,6 +1,6 @@
 ---
 title: Record ingestion
-weight: 13
+weight: 14
 ---
 
 Ingestion is how a client's existing data gets **into** Kura. Every
@@ -49,13 +49,17 @@ a read Fetcher cannot.
   [PII detector](pii). This is the ingestion-time scan; its detected spans
   are persisted as metadata in `kura.pii_spans` (coordinates only — never
   the text).
-- **Classify.** Each field's at-rest storage is decided: a value is stored
-  **encrypted** when its manifest type is free-text, when the manifest
-  declares it a high-sensitivity category (account numbers, secrets), or
-  when the ingestion scan detected a high-sensitivity category in it. The
-  last rule catches PII landing in a field the schema author did not flag.
-  Everything else is stored as plaintext. (This mirrors how the read path
-  decides what to decrypt.)
+- **Classify.** Each field's at-rest storage is decided by **type, not
+  sensitivity**: content is **encrypted by default**. Every field is stored
+  encrypted unless its manifest type is *structural* — `integer`, `boolean`,
+  or `timestamp` — which hold non-content values that carry no PII. (The
+  record sequence is a system column, never a field value, so it is
+  plaintext by construction.) So `string` and `text` fields always encrypt,
+  whether or not they are PII-tagged and whatever the scan found. The opt-out
+  is the type alone: shreddability is decoupled from visibility, so a field's
+  sensitivity governs [masking](policy), never whether it encrypts.
+  Defaulting to encrypt also fails closed — a field type added later encrypts
+  until it is deliberately classified structural.
 - **Write & audit.** The record, its field values, and its spans are
   persisted in one tenant-scoped transaction, and the create is recorded
   in the [audit log](audit) against the new record's id.

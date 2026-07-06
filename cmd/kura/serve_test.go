@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bensyverson/kura/internal/data"
+	"github.com/bensyverson/kura/internal/secrets"
 	"github.com/bensyverson/kura/internal/server"
 )
 
@@ -39,6 +40,11 @@ const oneEntityManifest = `{
     }
   ]
 }`
+
+// testKEK is a valid base64-encoded 32-byte master KEK for tests that
+// exercise the Postgres path (FIELD_ENCRYPTION_KEY must now decode to
+// an AES-256 key). It is the base64 of "0123456789abcdef0123456789abcdef".
+const testKEK = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 
 // serveEnv is a complete set of the environment variables serveConfig
 // requires, for tests to start from and then perturb. It includes the
@@ -143,7 +149,7 @@ func TestServeConfigDefaultsToInMemoryStores(t *testing.T) {
 func TestServeConfigDatabaseURLRequiresTenantID(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
 	delete(env, "KURA_DB_TENANT_ID")
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
@@ -161,12 +167,12 @@ func TestServeConfigDatabaseURLRequiresEncryptionKey(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	delete(env, "KURA_RECORD_ENCRYPTION_KEY")
+	delete(env, "FIELD_ENCRYPTION_KEY")
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
-		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_RECORD_ENCRYPTION_KEY")
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no FIELD_ENCRYPTION_KEY")
 	}
-	if !strings.Contains(err.Error(), "KURA_RECORD_ENCRYPTION_KEY") {
+	if !strings.Contains(err.Error(), "FIELD_ENCRYPTION_KEY") {
 		t.Errorf("error %q does not name the missing variable", err)
 	}
 }
@@ -178,10 +184,104 @@ func TestServeConfigRejectsInsecureDatabaseURL(t *testing.T) {
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=disable"
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-encryption-key"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_KEYSTORE_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
 	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err == nil {
 		t.Fatal("serveConfig accepted a non-TLS KURA_DATABASE_URL")
+	}
+}
+
+// With KURA_DATABASE_URL set, the key-store DSN is required: the wrapped
+// DEKs live in a physically separate instance (ADR 0002), so a deployment
+// that configures a data database but no key store cannot seal or erase
+// values and must fail startup loudly rather than come up half-wired.
+func TestServeConfigDatabaseURLRequiresKeystoreURL(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	delete(env, "KURA_KEYSTORE_DATABASE_URL")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_KEYSTORE_DATABASE_URL")
+	}
+	if !strings.Contains(err.Error(), "KURA_KEYSTORE_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
+	}
+}
+
+// A malformed master KEK — not base64, or not 32 bytes — is a fail-fast
+// startup error, never a silent weakening of encryption.
+func TestServeConfigRejectsMalformedKEK(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["FIELD_ENCRYPTION_KEY"] = "not-a-32-byte-base64-key"
+	env["KURA_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_KEYSTORE_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = "postgres://localhost:5432/keystore?sslmode=require"
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted a malformed FIELD_ENCRYPTION_KEY")
+	}
+	if !strings.Contains(err.Error(), "FIELD_ENCRYPTION_KEY") {
+		t.Errorf("error %q does not name FIELD_ENCRYPTION_KEY", err)
+	}
+}
+
+// buildSecretsBackend selects the Doppler backend when a service token is
+// configured — the managed Standard-Regulated secrets store — so in
+// production the KEK is sourced from the secrets manager, never a bare env
+// read in the data path.
+func TestBuildSecretsBackendSelectsDoppler(t *testing.T) {
+	env := map[string]string{
+		"KURA_DOPPLER_TOKEN":   "dp.st.test-token",
+		"KURA_DOPPLER_PROJECT": "kura",
+		"KURA_DOPPLER_CONFIG":  "prod",
+	}
+	backend, err := buildSecretsBackend(func(k string) string { return env[k] })
+	if err != nil {
+		t.Fatalf("buildSecretsBackend: %v", err)
+	}
+	if _, ok := backend.(*secrets.DopplerBackend); !ok {
+		t.Errorf("backend = %T, want *secrets.DopplerBackend when a Doppler token is set", backend)
+	}
+}
+
+// With no Doppler token configured, buildSecretsBackend falls back to the
+// EnvBackend — the credential-less dev/bare counterpart that resolves
+// secrets from the process environment.
+func TestBuildSecretsBackendFallsBackToEnv(t *testing.T) {
+	backend, err := buildSecretsBackend(func(string) string { return "" })
+	if err != nil {
+		t.Fatalf("buildSecretsBackend: %v", err)
+	}
+	if _, ok := backend.(*secrets.EnvBackend); !ok {
+		t.Errorf("backend = %T, want *secrets.EnvBackend when no Doppler token is set", backend)
+	}
+}
+
+// With KURA_DATABASE_URL set, the elevated migrator/owner DSN is also
+// required: migrations and the append-only set are administered on the
+// kura_admin credential, never the runtime kura_api connection, so a
+// deployment that configures a runtime database but no migrator credential
+// must fail startup loudly rather than run DDL as the runtime role.
+func TestServeConfigDatabaseURLRequiresAdminURL(t *testing.T) {
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = "postgres://localhost:5432/kura?sslmode=require"
+	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+	delete(env, "KURA_ADMIN_DATABASE_URL")
+	_, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
+	if err == nil {
+		t.Fatal("serveConfig accepted KURA_DATABASE_URL with no KURA_ADMIN_DATABASE_URL")
+	}
+	if !strings.Contains(err.Error(), "KURA_ADMIN_DATABASE_URL") {
+		t.Errorf("error %q does not name the missing variable", err)
 	}
 }
 

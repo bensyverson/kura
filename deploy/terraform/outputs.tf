@@ -28,6 +28,11 @@ output "database_user" {
   value       = digitalocean_database_user.api.name
 }
 
+output "database_migrator_user" {
+  description = "Elevated migrator/owner database user (kura_admin); used only at startup for migrations and append-only reconciliation, via KURA_ADMIN_DATABASE_URL. Separate credential domain from the runtime user."
+  value       = digitalocean_database_user.migrator.name
+}
+
 output "backups_bucket" {
   description = "Concrete backups bucket name; set as KURA_DO_SPACES_BACKUPS_BUCKET on the API server."
   value       = digitalocean_spaces_bucket.backups.name

@@ -148,6 +148,53 @@ func TestDataRecordRendersMaskedFields(t *testing.T) {
 	}
 }
 
+// A field whose per-value key was crypto-shredded renders on the detail
+// page with a distinct erased marker — not as an empty value, and visibly
+// different from a policy-masked value. The dashboard is the last read
+// surface to carry the erased list the gate already exposes.
+func TestDataRecordRendersErasedFieldDistinctly(t *testing.T) {
+	fr := dataFakeRemote(t)
+	// c3's full_name was erased: its key is gone, so the value is absent
+	// from fields and the field name is reported in erased.
+	fr.records["customer"] = append(fr.records["customer"],
+		recordWire{ID: "c3", Fields: map[string]string{"id": "c3"}, Erased: []string{"full_name"}})
+	s := newTestServer(t, fr.URL, staticToken{token: "tok"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/data/customer/c3"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /data/customer/c3 = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	// The erased field carries the erased marker...
+	if !strings.Contains(body, "[erased]") {
+		t.Errorf("erased field did not render the [erased] marker; body:\n%s", body)
+	}
+	// ...and is not confused with a policy-masked value (c3 has none).
+	if strings.Contains(body, "[redacted]") {
+		t.Errorf("erased field rendered as if masked ([redacted]); body:\n%s", body)
+	}
+}
+
+// The list/browser view marks an erased field with the same sentinel, so a
+// listing of records with erased fields reads consistently with the detail
+// page and the CLI.
+func TestDataListRendersErasedFieldDistinctly(t *testing.T) {
+	fr := dataFakeRemote(t)
+	fr.records["customer"] = append(fr.records["customer"],
+		recordWire{ID: "c3", Fields: map[string]string{"id": "c3"}, Erased: []string{"full_name"}})
+	s := newTestServer(t, fr.URL, staticToken{token: "tok"})
+
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, loopbackGet("/data/customer"))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /data/customer = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "[erased]") {
+		t.Errorf("list view did not mark the erased field with [erased]; body:\n%s", rec.Body.String())
+	}
+}
+
 // The record detail follows relationships to the target entity's browser.
 func TestDataRecordRendersRelationshipLinks(t *testing.T) {
 	fr := dataFakeRemote(t)

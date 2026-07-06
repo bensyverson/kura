@@ -81,11 +81,13 @@ type fakeRemote struct {
 	reviews *review.MemStore
 }
 
-// recordWire is one record as the remote serves it — an id and a map of
-// (already-masked) field values.
+// recordWire is one record as the remote serves it — an id, a map of
+// (already-masked) field values, and the names of any crypto-shredded
+// fields (absent from Fields, reported in Erased).
 type recordWire struct {
 	ID     string            `json:"id"`
 	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // auditEventWire mirrors the remote API's audit-event JSON shape; the fake
@@ -254,9 +256,11 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 		fr.mu.Lock()
 		status := fr.status
 		var fields map[string]string
+		var erased []string
 		for _, rec := range fr.records[r.PathValue("entity")] {
 			if rec.ID == r.PathValue("id") {
 				fields = rec.Fields
+				erased = rec.Erased
 			}
 		}
 		fr.mu.Unlock()
@@ -269,7 +273,10 @@ func newFakeRemote(t *testing.T) *fakeRemote {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(fields)
+		_ = json.NewEncoder(w).Encode(struct {
+			Fields map[string]string `json:"fields"`
+			Erased []string          `json:"erased,omitempty"`
+		}{Fields: fields, Erased: erased})
 	})
 
 	mux.HandleFunc("POST /api/reviews", func(w http.ResponseWriter, r *http.Request) {

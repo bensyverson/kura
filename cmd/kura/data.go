@@ -86,11 +86,11 @@ fetch related records.`,
 			if err != nil {
 				return err
 			}
-			fields, err := fetchEntityRecord(cmd, server, entity, id)
+			fields, erased, err := fetchEntityRecord(cmd, server, entity, id)
 			if err != nil {
 				return err
 			}
-			return renderEntityRecord(cmd, entity, id, fields)
+			return renderEntityRecord(cmd, entity, id, fields, erased)
 		},
 	}
 }
@@ -106,10 +106,20 @@ type entityPage struct {
 	Offset  int            `json:"offset"`
 }
 
-// entityRecord is one record in an entityPage: id plus masked fields.
+// erasedValue is the sentinel the CLI renders in place of a field whose
+// per-value DEK was crypto-shredded. The value is gone by design — not
+// masked, not merely absent — so it reads distinctly from both a redacted
+// value and a field that was never set.
+const erasedValue = "[erased]"
+
+// entityRecord is one record in an entityPage: id, its masked fields, and
+// the names of any fields whose per-value DEK was crypto-shredded. An
+// erased field is absent from Fields and named in Erased; the CLI renders
+// it with the erasedValue sentinel.
 type entityRecord struct {
 	ID     string            `json:"id"`
 	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // fetchEntityPage GETs /api/{entity} with the cached bearer token and
@@ -158,39 +168,43 @@ func fetchEntityPage(cmd *cobra.Command, server, entity string, limit, offset in
 	return page, nil
 }
 
-// fetchEntityRecord GETs /api/{entity}/{id}, returning the record's
-// masked field values. The server's response is just the fields map —
-// the id is in the URL, not the body.
-func fetchEntityRecord(cmd *cobra.Command, server, entity, id string) (map[string]string, error) {
+// fetchEntityRecord GETs /api/{entity}/{id}, returning the record's masked
+// field values and the names of any crypto-shredded fields. The server's
+// response wraps the fields map alongside the erased list; the id is in the
+// URL, not the body.
+func fetchEntityRecord(cmd *cobra.Command, server, entity, id string) (map[string]string, []string, error) {
 	cache, err := defaultTokenCache()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	_, token, err := cache.load()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	target := strings.TrimRight(server, "/") + "/api/" + url.PathEscape(entity) + "/" + url.PathEscape(id)
 	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, target, nil)
 	if err != nil {
-		return nil, clio.InternalError("show", "building request: %w", err)
+		return nil, nil, clio.InternalError("show", "building request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, clio.TransientError("show", "%w", err)
+		return nil, nil, clio.TransientError("show", "%w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, classifyHTTPStatus("show", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, nil, classifyHTTPStatus("show", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
-	var fields map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&fields); err != nil {
-		return nil, clio.InternalError("show", "decoding server response: %w", err)
+	var body struct {
+		Fields map[string]string `json:"fields"`
+		Erased []string          `json:"erased"`
 	}
-	return fields, nil
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, nil, clio.InternalError("show", "decoding server response: %w", err)
+	}
+	return body.Fields, body.Erased, nil
 }
 
 // renderEntityPage writes the page to stdout — JSON for machines,
@@ -210,16 +224,39 @@ func renderEntityPage(cmd *cobra.Command, entity string, page entityPage) error 
 			return nil
 		}
 		for _, rec := range page.Records {
-			fmt.Fprintf(w, "- **%s** — %s\n", rec.ID, formatFieldsInline(rec.Fields))
+			fmt.Fprintf(w, "- **%s** — %s\n", rec.ID, formatFieldsInline(rec.Fields, rec.Erased))
 		}
 		return nil
 	})
 }
 
+// fieldRow is one rendered field: its name and the value to display — the
+// masked value, or the erasedValue sentinel for a crypto-shredded field.
+type fieldRow struct {
+	name, value string
+}
+
+// mergeFields merges a record's visible fields with its erased field names
+// into a single name-sorted list, stamping the erasedValue sentinel in
+// place of each erased field. The two sets are disjoint by construction —
+// an erased field is omitted from fields and named in erased — so an erased
+// field renders distinctly from both a masked value and an absent one.
+func mergeFields(fields map[string]string, erased []string) []fieldRow {
+	rows := make([]fieldRow, 0, len(fields)+len(erased))
+	for name, value := range fields {
+		rows = append(rows, fieldRow{name, value})
+	}
+	for _, name := range erased {
+		rows = append(rows, fieldRow{name, erasedValue})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].name < rows[j].name })
+	return rows
+}
+
 // renderEntityRecord writes a single record to stdout. The shape — id
 // then field rows in sorted order — is the same in JSON and Markdown,
 // so masking invariance across formats is by construction.
-func renderEntityRecord(cmd *cobra.Command, entity, id string, fields map[string]string) error {
+func renderEntityRecord(cmd *cobra.Command, entity, id string, fields map[string]string, erased []string) error {
 	useJSON, _ := cmd.Flags().GetBool("json")
 	format := clio.FormatMarkdown
 	if useJSON {
@@ -229,41 +266,34 @@ func renderEntityRecord(cmd *cobra.Command, entity, id string, fields map[string
 		Entity string            `json:"entity"`
 		ID     string            `json:"id"`
 		Fields map[string]string `json:"fields"`
-	}{Entity: entity, ID: id, Fields: fields}
+		Erased []string          `json:"erased,omitempty"`
+	}{Entity: entity, ID: id, Fields: fields, Erased: erased}
 	return clio.Render(cmd.OutOrStdout(), format, payload, func(w io.Writer) error {
 		fmt.Fprintf(w, "# %s %s\n\n", entity, id)
-		if len(fields) == 0 {
+		if len(fields) == 0 && len(erased) == 0 {
 			fmt.Fprintln(w, "no fields visible — your policy may mask every field on this entity")
 			return nil
 		}
-		names := make([]string, 0, len(fields))
-		for k := range fields {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			fmt.Fprintf(w, "- %s: %s\n", name, fields[name])
+		for _, row := range mergeFields(fields, erased) {
+			fmt.Fprintf(w, "- %s: %s\n", row.name, row.value)
 		}
 		return nil
 	})
 }
 
 // formatFieldsInline renders a record's fields as a single sorted line
-// for the Markdown list view of `kura query`. Sorted so output is
+// for the Markdown list view of `kura query`, with each crypto-shredded
+// field shown as the erasedValue sentinel. Sorted so output is
 // deterministic; semicolon-separated so a field value containing a
 // comma does not look like a field boundary.
-func formatFieldsInline(fields map[string]string) string {
-	if len(fields) == 0 {
+func formatFieldsInline(fields map[string]string, erased []string) string {
+	if len(fields) == 0 && len(erased) == 0 {
 		return "(no visible fields)"
 	}
-	names := make([]string, 0, len(fields))
-	for k := range fields {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	parts := make([]string, len(names))
-	for i, name := range names {
-		parts[i] = name + ": " + fields[name]
+	rows := mergeFields(fields, erased)
+	parts := make([]string, len(rows))
+	for i, row := range rows {
+		parts[i] = row.name + ": " + row.value
 	}
 	return strings.Join(parts, "; ")
 }

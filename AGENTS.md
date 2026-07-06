@@ -20,7 +20,7 @@ The product is `internal/` — the core enforcement library (Cedar authorization
 
 ## CLI conventions
 
-- **Open with `job status`.** At session start, `job status` (no arg) is both the identity check and the landscape briefing.
+- **Open by running `job orient` (standalone tool, no arguments).** At session start, `job orient` is the landscape briefing.
 
 ## General
 
@@ -30,7 +30,7 @@ The product is `internal/` — the core enforcement library (Cedar authorization
 - IMPORTANT: In this project we ALWAYS follow strict "red/green" TDD; write tests for all example cases we need to handle and any new methods we're implementing, verify that they fail, and *then* proceed to implement your code changes. If you must alter a previous test to get it to pass, explain exactly WHY to the user and get their consent.
 - Before fixing a bug, try to create a regression test to catch it in the future.
 - DO NOT begin a new chat by doing an extensive exploration of the entire codebase. That is wasteful, as this is a large codebase. Instead, read the README and use an Explore agent to read the `docs/` documentation if you want to get the lay of the land. Of course, once you have a specific need, you can explore as much of the code as you require.
-- To create and manage plans and task lists, always use the `job` command.
+- To create and manage plans and task lists, always use the `job` command. Do not use Plan Mode.
 
 ## Understand the "why"
 Before you answer a question or respond to a request, you must understand **why** the user has made this request. Beware of the "XY Problem." If the user's motivation or goal is not 100% clear, first ask clarifying questions until you fully understand what they're trying to achieve.

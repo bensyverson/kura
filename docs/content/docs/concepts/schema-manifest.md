@@ -48,8 +48,34 @@ structured and feed the other surfaces.
 |---|---|---|
 | `name` | yes | Unique entity name. |
 | `description` | no | Human- and agent-readable summary. |
+| `append_only` | no | `true` makes the entity insert-only (see below). Defaults to `false`. |
 | `fields` | yes | The entity's attributes. At least one. |
 | `relationships` | no | Typed edges to other entities. |
+
+### Append-only entities
+
+```json
+{ "name": "ledger_entry", "append_only": true, "fields": [ ... ] }
+```
+
+An entity marked `append_only` stores **insert-only** records: they may be created
+but never updated or deleted. This is for event-like data — anything that should
+accrete an immutable history rather than be edited in place. An append-only entity
+may still declare relationships, and may be the target of other entities'
+relationships, so its records can be referenced like any other.
+
+The property is enforced on three layers, all driven by this one flag:
+
+- **The Cedar policy forbids it.** A policy that grants `update` or `delete` on an
+  append-only entity is rejected at validation, the default policy never emits those
+  grants, and the [policy viewer](policy) renders those cells as **N/A** rather than
+  empty — the immutability is legible, not merely unconfigured.
+- **The database enforces it.** A trigger raises a loud, specific error on any
+  `UPDATE` or `DELETE` of an append-only record, so the rule holds even against a
+  direct runtime database connection. See [Database](database#append-only-enforcement).
+- **Startup reconciles it.** The set of append-only entities is derived from the
+  manifest and applied at startup; tightening is automatic, loosening an entity that
+  already has stored records is refused without an explicit operator override.
 
 ## Fields
 
@@ -101,6 +127,46 @@ An unrecognized `pii` value fails validation.
 | `kind` | yes | `one` or `many` — the cardinality of the target. |
 | `target` | yes | The name of the entity this relationship points to. Must resolve. |
 | `description` | no | Human- and agent-readable summary. |
+
+### How relationships are persisted
+
+A declared relationship becomes a typed **edge** between records, stored in
+`kura.record_edges` (see [Database](../database/#relationships-typed-edges)).
+Relationships are supplied **at record creation**, in the same request as the
+record's fields, and the edge is written in the same transaction as the
+record — they commit together or not at all. Standalone post-creation
+add/remove of an edge is a mutation, and Kura has no update path yet, so it is
+deferred to that future work.
+
+Each edge is validated **at the gate** on ingest, instance by instance:
+
+- the relationship must be one the entity declares;
+- every target must be an existing record **of the declared `target` entity**
+  (a target that is missing, or is some other entity, is rejected);
+- **cardinality holds** — a `one` relationship accepts at most one target; a
+  `many` relationship accepts several.
+
+A record is created with relationships by sending `{fields, relationships}`,
+where `relationships` maps a relationship name to its target record ids. A
+`one` relationship takes a single id; a `many` relationship takes a list:
+
+```json
+{
+  "fields": { "total_cents": "4200" },
+  "relationships": {
+    "customer": ["cust-7"],
+    "line_items": ["item-1", "item-2", "item-3"]
+  }
+}
+```
+
+Here `customer` is a `one` relationship (exactly one target) and `line_items`
+is a `many` relationship (several). Endpoint ids are stored as plaintext,
+indexable uuids — relationship references are never encrypted — so a record's
+edges can be read back in either direction with `kura edges <entity> <id>
+--direction out|in` (or `GET /api/{entity}/{id}/edges`). Kura does not
+*traverse* relationships: an edge read returns ids, not the related records'
+fields; fetch a target with a second `kura show`.
 
 ## Validation
 

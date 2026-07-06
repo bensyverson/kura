@@ -44,11 +44,18 @@ type dataListView struct {
 }
 
 // dataRecordRow is one record in a list: its id (linked to the detail page)
-// and its cell values in column order.
+// and its cells in column order.
 type dataRecordRow struct {
 	ID    string
 	Href  string
-	Cells []string
+	Cells []dataCell
+}
+
+// dataCell is one cell in a list row: its masked value, or, when the
+// field's key was crypto-shredded, the erased marker in place of a value.
+type dataCell struct {
+	Value  string
+	Erased bool
 }
 
 // dataRelLink is one relationship rendered as a link to the target
@@ -71,12 +78,15 @@ type dataRecordView struct {
 }
 
 // dataFieldDetail is one field on the record detail: its name, its masked
-// value, and the PII category it carries (empty if not personally
-// identifying).
+// value, the PII category it carries (empty if not personally identifying),
+// and whether its value was crypto-shredded. An erased field carries no
+// value — the marker stands in its place — so the view can tell it apart
+// from a masked value and from a field that was never set.
 type dataFieldDetail struct {
-	Name  string
-	Value string
-	PII   string
+	Name   string
+	Value  string
+	PII    string
+	Erased bool
 }
 
 // handleDataIndex renders the data browser landing page: the entity list,
@@ -161,7 +171,7 @@ func (s *Server) handleDataRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fields, err := s.api.record(r.Context(), entity, id)
+	fields, erased, err := s.api.record(r.Context(), entity, id)
 	if err != nil {
 		if errors.Is(err, ErrRemoteNotFound) {
 			s.renderNotFound(w, &principal, "No such record", "No record with that id exists for this entity.")
@@ -171,7 +181,7 @@ func (s *Server) handleDataRecord(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	view := buildDataRecord(ent, id, fields)
+	view := buildDataRecord(ent, id, fields, erased)
 	s.render(w, http.StatusOK, "data_record", pageData{
 		Title:      ent.Name + " · " + id,
 		Nav:        navFor("/data"),
@@ -219,9 +229,10 @@ func buildDataList(e *manifest.Entity, records []recordRow, offset int) dataList
 
 	rows := make([]dataRecordRow, len(records))
 	for i, rec := range records {
-		cells := make([]string, len(columns))
+		erased := erasedSet(rec.Erased)
+		cells := make([]dataCell, len(columns))
 		for j, col := range columns {
-			cells[j] = rec.Fields[col]
+			cells[j] = dataCell{Value: rec.Fields[col], Erased: erased[col]}
 		}
 		rows[i] = dataRecordRow{
 			ID:    rec.ID,
@@ -252,8 +263,11 @@ func buildDataList(e *manifest.Entity, records []recordRow, offset int) dataList
 }
 
 // buildDataRecord pairs each manifest field with its masked value and PII
-// category, in manifest order, and renders the relationships as links.
-func buildDataRecord(e *manifest.Entity, id string, fields map[string]string) dataRecordView {
+// category, in manifest order, and renders the relationships as links. A
+// field named in erased carries no value — its key was crypto-shredded — so
+// it is marked erased for the view to render distinctly.
+func buildDataRecord(e *manifest.Entity, id string, fields map[string]string, erased []string) dataRecordView {
+	shredded := erasedSet(erased)
 	details := make([]dataFieldDetail, 0, len(e.Fields))
 	for _, f := range e.Fields {
 		var category string
@@ -261,9 +275,10 @@ func buildDataRecord(e *manifest.Entity, id string, fields map[string]string) da
 			category = string(*f.PII)
 		}
 		details = append(details, dataFieldDetail{
-			Name:  f.Name,
-			Value: fields[f.Name],
-			PII:   category,
+			Name:   f.Name,
+			Value:  fields[f.Name],
+			PII:    category,
+			Erased: shredded[f.Name],
 		})
 	}
 	return dataRecordView{
@@ -272,6 +287,19 @@ func buildDataRecord(e *manifest.Entity, id string, fields map[string]string) da
 		Fields:        details,
 		Relationships: relLinks(e),
 	}
+}
+
+// erasedSet indexes a record's erased field names for O(1) lookup while
+// building a view.
+func erasedSet(names []string) map[string]bool {
+	if len(names) == 0 {
+		return nil
+	}
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	return set
 }
 
 // relLinks renders an entity's relationships as links to the target

@@ -18,10 +18,12 @@ import (
 	"github.com/bensyverson/kura/internal/gate"
 	"github.com/bensyverson/kura/internal/identity"
 	"github.com/bensyverson/kura/internal/jobs"
+	"github.com/bensyverson/kura/internal/keystore"
 	"github.com/bensyverson/kura/internal/llm"
 	"github.com/bensyverson/kura/internal/manifest"
 	"github.com/bensyverson/kura/internal/pii"
 	"github.com/bensyverson/kura/internal/review"
+	"github.com/bensyverson/kura/internal/secrets"
 	"github.com/bensyverson/kura/internal/server"
 	"github.com/bensyverson/kura/internal/storage"
 	"github.com/spf13/cobra"
@@ -36,6 +38,13 @@ const oidcDiscoveryTimeout = 15 * time.Second
 // serveConfig when KURA_DATABASE_URL is set. An unreachable database must
 // fail the operator's startup quickly, not hang.
 const dbStartupTimeout = 30 * time.Second
+
+// keystoreCacheCapacity bounds the in-process LRU of unwrapped DEKs the
+// record store reads through. It trades a fixed amount of memory for
+// avoiding a key-store round-trip and an unwrap on hot reads; the cache
+// honours crypto-shred eviction, so a bounded stale window is never a
+// correctness risk.
+const keystoreCacheCapacity = 4096
 
 // defaultServeAddr binds loopback only. Caddy terminates TLS in front of
 // the server and proxies to it on the same host (Phase 6), so the server
@@ -121,9 +130,47 @@ Configuration is read from the environment:
   KURA_DB_TENANT_ID          tenant id the Postgres stores scope their
                              row-level security to (required when
                              KURA_DATABASE_URL is set)
-  KURA_RECORD_ENCRYPTION_KEY app-managed key the Postgres record store
-                             decrypts encrypted fields with (required when
-                             KURA_DATABASE_URL is set)
+  FIELD_ENCRYPTION_KEY       master KEK the record store wraps per-value
+                             DEKs under: a base64-encoded 32-byte AES-256
+                             key (openssl rand -base64 32). Sourced from the
+                             secrets manager (Doppler in production, this
+                             process environment on the dev/bare path) under
+                             its canonical secret name, never read into the
+                             data path directly. Required when
+                             KURA_DATABASE_URL is set
+  KURA_DOPPLER_TOKEN         Doppler service token. When set, secrets
+                             (FIELD_ENCRYPTION_KEY included) are read from
+                             Doppler over its HTTPS API rather than the
+                             process environment; KURA_DOPPLER_PROJECT and
+                             KURA_DOPPLER_CONFIG are then required to address
+                             the store. Injected at runtime by the deployment,
+                             never baked in
+  KURA_DOPPLER_PROJECT       Doppler project addressing the secret store
+                             (required when KURA_DOPPLER_TOKEN is set)
+  KURA_DOPPLER_CONFIG        Doppler config addressing the secret store
+                             (required when KURA_DOPPLER_TOKEN is set)
+  KURA_ADMIN_DATABASE_URL    elevated migrator/owner DSN (TLS required; the
+                             kura_admin role). Schema migrations and the
+                             append-only set are administered on this
+                             connection — never the runtime kura_api
+                             connection — so the runtime role cannot own
+                             schema objects or write the append-only set.
+                             Required when KURA_DATABASE_URL is set
+  KURA_KEYSTORE_DATABASE_URL runtime DSN of the separate, erasable key-store
+                             instance that holds wrapped DEKs (ADR 0002). A
+                             physically distinct instance so crypto-shredding
+                             can destroy keys the immutable backup never
+                             captured. Required when KURA_DATABASE_URL is set
+  KURA_KEYSTORE_ADMIN_DATABASE_URL
+                             elevated migrator DSN for the key-store instance;
+                             its schema lineage is applied here at startup.
+                             Required when KURA_DATABASE_URL is set
+  KURA_APPEND_ONLY_ALLOW_LOOSEN
+                             set truthy to permit removing append-only
+                             protection from an entity that already has stored
+                             records (otherwise startup refuses, so a boundary
+                             is never weakened by a stray manifest edit). Every
+                             loosening is audited. Leave unset normally
   KURA_DO_SPACES_ENDPOINT    DO Spaces (S3-compatible) host without scheme,
                              e.g. nyc3.digitaloceanspaces.com. Setting it
                              turns on the backup/restore job kinds; unset,
@@ -139,7 +186,7 @@ Configuration is read from the environment:
                              provisioned for this deployment
   KURA_BACKUP_ENCRYPTION_KEY high-entropy secret the backup dump is
                              encrypted under; distinct from
-                             KURA_RECORD_ENCRYPTION_KEY by design
+                             FIELD_ENCRYPTION_KEY by design
   KURA_MANIFEST_PATH         path to the schema manifest file. When set,
                              the gate enforces against it and the API grows
                              a data route per declared entity; an invalid
@@ -228,9 +275,38 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	// same user store both resolves roles for the gate and is the admin
 	// endpoints' management surface, so enforcement and management never
 	// drift.
+	// The manifest is loaded before the stores: the Postgres path reconciles
+	// the append-only entity set from it at startup, on the elevated
+	// connection. KURA_APPEND_ONLY_ALLOW_LOOSEN is the explicit operator
+	// override that permits removing protection from an entity that already
+	// has stored records (every such change is audited).
+	m, err := buildManifest(getenv)
+	if err != nil {
+		return server.Config{}, err
+	}
 	records, writer, users, pool, err := buildStores(getenv)
 	if err != nil {
 		return server.Config{}, err
+	}
+	// With the schema migrated, reconcile the append-only entity set from the
+	// manifest on the elevated connection. A refused loosening fails startup
+	// loudly rather than silently weakening a boundary.
+	if err := reconcileAppendOnly(getenv, m, recorder); err != nil {
+		return server.Config{}, err
+	}
+	// The record store is also the edge reader — both the Postgres store and
+	// the in-memory store implement EdgeReader — so the edges route reads
+	// through the same instance the gate enforces against.
+	edges, ok := records.(data.EdgeReader)
+	if !ok {
+		return server.Config{}, fmt.Errorf("serve: record store %T does not read relationship edges", records)
+	}
+	// The record store is also the eraser — both the Postgres store and the
+	// in-memory store implement Eraser — so the erasure endpoint shreds keys
+	// through the same instance the gate enforces against.
+	eraser, ok := records.(data.Eraser)
+	if !ok {
+		return server.Config{}, fmt.Errorf("serve: record store %T does not support crypto-shred erasure", records)
 	}
 
 	// The jobs ledger shares the same pool as the data stores. The backup
@@ -242,11 +318,6 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		return server.Config{}, err
 	}
 	jobsMgr, err := buildJobsManager(pool, getenv("KURA_DB_TENANT_ID"), backupSvc)
-	if err != nil {
-		return server.Config{}, err
-	}
-
-	m, err := buildManifest(getenv)
 	if err != nil {
 		return server.Config{}, err
 	}
@@ -274,6 +345,8 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 		// same store under its read and write interfaces.
 		Records: records,
 		Writer:  writer,
+		Edges:   edges,
+		Eraser:  eraser,
 		Users:   users,
 		// IdP is the vendor Directory paired with the sign-in IdP:
 		// googleDirectory for Google, microsoftDirectory for Entra,
@@ -300,17 +373,32 @@ func serveConfig(addr string, getenv func(string) string) (server.Config, error)
 	}, nil
 }
 
+// buildSecretsBackend selects the secrets Backend from the environment.
+// With a Doppler service token configured (KURA_DOPPLER_TOKEN, plus its
+// project and config) it returns the DopplerBackend — the Standard-Regulated
+// managed secrets store — so every secret, the KEK included, is sourced from
+// the secrets manager. With no token it returns an EnvBackend reading secrets
+// from the process environment: the credential-less dev/bare counterpart,
+// parallel to the in-memory data store. Routing the KEK through this one seam
+// means the data path never reads it from a bare env var directly.
+func buildSecretsBackend(getenv func(string) string) (secrets.Backend, error) {
+	if token := getenv("KURA_DOPPLER_TOKEN"); token != "" {
+		return secrets.NewDopplerBackend(token, getenv("KURA_DOPPLER_PROJECT"), getenv("KURA_DOPPLER_CONFIG"))
+	}
+	return secrets.NewEnvBackend(getenv), nil
+}
+
 // buildStores selects the record and user stores from the environment.
 // With KURA_DATABASE_URL set it opens the configured Postgres database,
 // runs any pending migrations against it, and returns the Postgres-backed
-// stores plus the open pool; the companion KURA_DB_TENANT_ID and
-// KURA_RECORD_ENCRYPTION_KEY are then required, and a non-TLS DSN is
-// refused. With no database URL it returns the in-memory stores and a nil
-// pool — the credential-less dev/bare path — so a server with no DB
-// configured behaves exactly as before. All stores share one pool: the
-// user store resolves roles for the gate and the jobs ledger persists work
-// against the same database, so a single connection serves enforcement,
-// management, and the async ledger alike.
+// stores plus the open pool; the companion KURA_DB_TENANT_ID is then
+// required, the master KEK is sourced from the secrets backend, and a
+// non-TLS DSN is refused. With no database URL it returns the in-memory
+// stores and a nil pool — the credential-less dev/bare path — so a server
+// with no DB configured behaves exactly as before. All stores share one
+// pool: the user store resolves roles for the gate and the jobs ledger
+// persists work against the same database, so a single connection serves
+// enforcement, management, and the async ledger alike.
 func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWriter, data.UserStore, *sql.DB, error) {
 	dsn := getenv("KURA_DATABASE_URL")
 	if dsn == "" {
@@ -328,27 +416,108 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
-	encKey, err := required("KURA_RECORD_ENCRYPTION_KEY")
+	// The master KEK wraps every per-value DEK. It is sourced from the secrets
+	// manager (Doppler in production, the process environment on the dev/bare
+	// path) — never a bare env read in the data path. The write path seals
+	// under the active generation via a key ring; during a rotation the ring
+	// also holds the retiring generation so the read path can open rows not
+	// yet re-wrapped. Keys are base64-encoded 32-byte AES-256 (openssl rand
+	// -base64 32); the data layer receives only the wrap/unwrap capability,
+	// never the raw key. A missing or malformed KEK is a fail-fast startup
+	// error, not a silent weakening of encryption.
+	backend, err := buildSecretsBackend(getenv)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	keyring, err := buildKeyRing(context.Background(), backend, getenv)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	adminDSN, err := required("KURA_ADMIN_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	// The key store is a physically separate, erasable Postgres instance
+	// (ADR 0002), so it has its own runtime and migrator DSNs. Requiring them
+	// whenever KURA_DATABASE_URL is set means a data deployment can never come
+	// up with encryption half-wired — a store that could seal values it could
+	// never erase.
+	keystoreDSN, err := required("KURA_KEYSTORE_DATABASE_URL")
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	keystoreAdminDSN, err := required("KURA_KEYSTORE_ADMIN_DATABASE_URL")
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
 
-	// Open validates the DSN — refusing any non-TLS connection — before the
-	// pool is created. The pool is lazy, so the first real connection (and
-	// any unreachable-host failure) happens during Migrate below.
+	// Two credentials, two connections. Schema evolution — and the
+	// append-only set in particular — is administered on the elevated
+	// migrator/owner connection (kura_admin), never on the runtime
+	// connection (kura_api): the runtime role must not be able to own schema
+	// objects or write the append-only set, or it could declare an entity
+	// mutable that the manifest froze. db.Open validates each DSN, refusing
+	// any non-TLS connection, before the lazy pool's first real connection.
+	adminPool, err := db.Open(adminDSN)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening migrator database: %w", err)
+	}
 	pool, err := db.Open(dsn)
 	if err != nil {
+		adminPool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: opening database: %w", err)
 	}
+
+	// Migrations run on the elevated connection so every schema object is
+	// owned by kura_admin. The first real connection (and any
+	// unreachable-host failure) happens here, during Migrate.
 	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
 	defer cancel()
-	if err := db.Migrate(ctx, pool); err != nil {
+	if err := db.Migrate(ctx, adminPool); err != nil {
+		adminPool.Close()
 		pool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: running migrations: %w", err)
 	}
+	adminPool.Close()
 
-	pg, err := data.NewPostgresStore(pool, tenantID, encKey)
+	// The key store is a distinct instance: migrate its own lineage on its
+	// own migrator connection, then open the runtime pool the cache reads
+	// through. Its lineage is numbered independently of the main schema, so
+	// it keeps its own schema_migrations — pointing Migrate and MigrateKeystore
+	// at the same database would collide the version sequences.
+	keystoreAdminPool, err := db.Open(keystoreAdminDSN)
 	if err != nil {
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening key-store migrator database: %w", err)
+	}
+	ksCtx, ksCancel := context.WithTimeout(context.Background(), dbStartupTimeout)
+	defer ksCancel()
+	if err := db.MigrateKeystore(ksCtx, keystoreAdminPool); err != nil {
+		keystoreAdminPool.Close()
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: running key-store migrations: %w", err)
+	}
+	keystoreAdminPool.Close()
+
+	keystorePool, err := db.Open(keystoreDSN)
+	if err != nil {
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: opening key-store database: %w", err)
+	}
+	ksStore, err := keystore.NewPostgresStore(keystorePool)
+	if err != nil {
+		keystorePool.Close()
+		pool.Close()
+		return nil, nil, nil, nil, fmt.Errorf("serve: building key store: %w", err)
+	}
+	// The cache fronts the key store on the read path, unwrapping DEKs with
+	// the KEK and honouring crypto-shred eviction. The record store writes
+	// wrapped DEKs straight through ksStore and reads through the cache.
+	dekCache := keystore.NewCache(ksStore, keyring, keystoreCacheCapacity)
+
+	pg, err := data.NewPostgresStore(pool, tenantID, ksStore, keyring, dekCache)
+	if err != nil {
+		keystorePool.Close()
 		pool.Close()
 		return nil, nil, nil, nil, fmt.Errorf("serve: building record store: %w", err)
 	}
@@ -358,6 +527,40 @@ func buildStores(getenv func(string) string) (data.RecordStore, data.RecordWrite
 		return nil, nil, nil, nil, fmt.Errorf("serve: building user store: %w", err)
 	}
 	return pg, pg, users, pool, nil
+}
+
+// reconcileAppendOnly brings the database's append-only entity set into line
+// with the manifest at startup, on the elevated migrator/owner connection —
+// the only credential that may write the set. It is a no-op on the
+// credential-less in-memory path (no database means no DB-level enforcement;
+// Cedar still forbids update/delete on append-only entities). Adding
+// protection applies silently; removing it from an entity that already has
+// stored records is refused unless KURA_APPEND_ONLY_ALLOW_LOOSEN is set, so a
+// boundary is never weakened as a side effect of a manifest edit. The
+// connection is short-lived: opened here, used, and closed.
+func reconcileAppendOnly(getenv func(string) string, m *manifest.Manifest, rec *audit.Recorder) error {
+	if getenv("KURA_DATABASE_URL") == "" {
+		return nil
+	}
+	var appendOnly []string
+	for _, e := range m.Entities {
+		if e.AppendOnly {
+			appendOnly = append(appendOnly, e.Name)
+		}
+	}
+
+	adminPool, err := db.Open(getenv("KURA_ADMIN_DATABASE_URL"))
+	if err != nil {
+		return fmt.Errorf("serve: opening migrator database for reconciliation: %w", err)
+	}
+	defer adminPool.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbStartupTimeout)
+	defer cancel()
+	if err := db.ReconcileAppendOnly(ctx, adminPool, getenv("KURA_DB_TENANT_ID"), appendOnly, rec, isTruthy(getenv("KURA_APPEND_ONLY_ALLOW_LOOSEN"))); err != nil {
+		return fmt.Errorf("serve: reconciling append-only entities: %w", err)
+	}
+	return nil
 }
 
 // buildJobsManager builds the async-jobs Manager. With a database pool it
@@ -399,7 +602,7 @@ func buildJobsManager(pool *sql.DB, tenantID string, svc *backup.Service) (*jobs
 // The Service is assembled from a PGDumper, the append-only DO Spaces
 // backups Store, the backup-encryption key derived from
 // KURA_BACKUP_ENCRYPTION_KEY (distinct from the runtime
-// KURA_RECORD_ENCRYPTION_KEY), the recorder, and the database DSN it
+// FIELD_ENCRYPTION_KEY), the recorder, and the database DSN it
 // dumps. buildJobsManager registers it automatically.
 func buildBackupService(getenv func(string) string, recorder *audit.Recorder) (*backup.Service, error) {
 	endpoint := getenv("KURA_DO_SPACES_ENDPOINT")

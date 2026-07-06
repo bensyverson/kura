@@ -43,7 +43,7 @@
       {{range $r := $e.Rows}}
       <tr>
         <td><span class="badge badge-{{$r.Role}}">{{$r.Role}}</span></td>
-        {{range $c := $r.Cells}}<td class="grid-cell">{{if $c}}<span class="yes" title="allowed">&#10003;</span>{{else}}<span class="no" title="not allowed" aria-label="not allowed">&mdash;</span>{{end}}</td>{{end}}
+        {{range $c := $r.Cells}}<td class="grid-cell">{{if $c.Unavailable}}<span class="na" title="not applicable — append-only entity is insert-only" aria-label="not applicable">N/A</span>{{else if $c.Granted}}<span class="yes" title="allowed">&#10003;</span>{{else}}<span class="no" title="not allowed" aria-label="not allowed">&mdash;</span>{{end}}</td>{{end}}
         <td class="mono">{{if $r.VisiblePII}}{{range $i, $p := $r.VisiblePII}}{{if $i}}, {{end}}{{$p}}{{end}}{{else}}<span class="muted">none — all masked</span>{{end}}</td>
       </tr>
       {{end}}
