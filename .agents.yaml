@@ -1,0 +1,8 @@
+modules:
+  - core
+  - principles
+  - stage-build
+  - go
+  - web
+  - docs
+  - adr
