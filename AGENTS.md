@@ -95,7 +95,7 @@ Pre-launch, zero users, no existing data. Never spend effort on backward compati
 - **`r.ParseForm()` reads a body only when it is urlencoded**; for multipart it leaves it empty without erroring. Keep one wire format per route — a handler that accepts two body shapes needs two sets of checks where the design wanted one.
 <!-- agents:end go -->
 
-<!-- agents:begin web@e2d669 -->
+<!-- agents:begin web@3c49b7 -->
 ## Web
 
 - **Vanilla HTML, CSS and JS** — no frameworks or build tools beyond the server. WebComponents are the enhancement layer: the server ships each element's real content as HTML inside it, and the component's JS upgrades what's already there — never an empty tag that renders itself.
@@ -106,7 +106,7 @@ Pre-launch, zero users, no existing data. Never spend effort on backward compati
 - **Paths over query strings** (`/api/people/89`, not `?id=89`); queries only for search, sort, filters.
 - **Public pages carry rich `<head>` metadata** including schema.org data.
 - **Server-side tests cannot see the browser.** Keep a JS/browser runner and run it by hand whenever you change behaviour a browser can observe — a green server suite is not evidence about the page.
-- **One custom element per file, named for the element** (`ok-agent-list.js`), with a shadow root so component styles don't leak.
+- **One custom element per file, named for the element** (`<app>-thing` lives in `app-thing.js`), with a shadow root so component styles don't leak.
 <!-- agents:end web -->
 
 <!-- agents:begin docs@7ba2fd -->
