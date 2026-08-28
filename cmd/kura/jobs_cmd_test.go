@@ -28,7 +28,7 @@ type fakeJobsServer struct {
 	// out, the last entry is returned forever — useful for tests that
 	// want a terminal state to hold.
 	script []map[string]any
-	calls  int32
+	calls  atomic.Int32
 
 	// returnError forces a non-200 response for the next get call.
 	getErrorStatus int
@@ -91,7 +91,7 @@ func (f *fakeJobsServer) handler() http.Handler {
 		_ = json.NewEncoder(w).Encode(out)
 	})
 	mux.HandleFunc("GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&f.calls, 1)
+		f.calls.Add(1)
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		if f.getErrorStatus != 0 {
@@ -232,7 +232,7 @@ func TestJobsGetWaitPollsUntilTerminal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("jobs get --wait: %v", err)
 	}
-	if got := atomic.LoadInt32(&fake.calls); got < 3 {
+	if got := fake.calls.Load(); got < 3 {
 		t.Fatalf("server saw %d GETs; want at least 3 (poll did not iterate)", got)
 	}
 	if !strings.Contains(stdout.String(), "succeeded") {

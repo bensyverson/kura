@@ -93,7 +93,7 @@ func TestCLIErrorPrefixesAreGreppable(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			first := strings.SplitN(err.Error(), "\n", 2)[0]
+			first, _, _ := strings.Cut(err.Error(), "\n")
 			if !strings.HasPrefix(first, c.wantPrefix) {
 				t.Errorf("first line %q does not start with %q", first, c.wantPrefix)
 			}
