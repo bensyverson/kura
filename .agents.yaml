@@ -6,3 +6,8 @@ modules:
   - web
   - docs
   - adr
+  - jobs-brief
+  - jobs
+  - harness-brief
+  - harness
+  - background
