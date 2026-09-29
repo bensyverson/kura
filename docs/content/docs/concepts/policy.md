@@ -108,3 +108,42 @@ reference architecture requires.
 | `admin` | all | every category |
 | `user` | all | every category **except** high-sensitivity (those stay masked) |
 | `auditor` | `read`, `list` only | none — all PII masked |
+
+For an [append-only entity](schema-manifest#append-only-entities), `all` excludes
+`update` and `delete`: even `admin` gets `create`, `read`, and `list` only.
+
+## Append-only entities
+
+When the manifest marks an entity [`append_only`](schema-manifest#append-only-entities),
+the policy layer treats `update` and `delete` on it as structurally unavailable, not
+merely ungranted:
+
+- **Validation rejects them.** A policy that grants `update` or `delete` on an
+  append-only entity fails validation with a matchable error
+  (`append-only entity "X" cannot grant action "update"`). `create` stays the only
+  write action.
+- **The default policy never emits them.** `DefaultPolicy` skips `update`/`delete`
+  grants for append-only entities entirely.
+- **The viewer shows N/A.** The [policy viewer](dashboard) renders those cells as
+  **N/A** rather than as empty grantable-but-ungranted cells, so a reviewer reads the
+  immutability instead of mistaking it for a permission someone forgot to grant.
+
+This is enforcement by validation, not type-level unrepresentability: which entities
+are append-only is runtime manifest data, so any scheme bottoms out in a runtime lookup
+anyway. The [database trigger](database#append-only-enforcement) is the mechanical
+backstop beneath the policy.
+
+### The snapshot-writer pattern
+
+Append-only is absolute at the entity level, but a system that needs a *mutable
+current view* over an immutable history models it as **two entities**: an append-only
+event entity, and a separate non-append-only "snapshot" entity that exactly one service
+role may `update`. That is pure configuration — grant `update` on the snapshot entity
+to a single service principal in the policy; Kura needs no new code. The events stay
+frozen; the snapshot is rebuilt from them.
+
+The first time Kura grows a mutation path, two further controls land with it: an
+application-layer check mirroring the trigger (defense in depth), and the
+redaction-bypass distinction (a lawful-erasure path that is *not* an ordinary update).
+Both are deferred until then — there is no mutation path today, so they would be
+untestable dead code.

@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"testing"
+
+	"github.com/bensyverson/kura/internal/crypto"
+	"github.com/bensyverson/kura/internal/keystore"
 )
 
 // PostgresStore satisfies the RecordWriter interface.
@@ -17,11 +20,9 @@ func TestPostgresStoreIsARecordWriter(t *testing.T) {
 // write satisfies the row-level-security WITH CHECK.
 func TestPostgresStoreInsertRoundTrips(t *testing.T) {
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 
 	id, err := store.Insert(context.Background(), RecordInput{
 		Entity: "patient",
@@ -49,17 +50,41 @@ func TestPostgresStoreInsertRoundTrips(t *testing.T) {
 	}
 }
 
+// The write path stamps the active KEK generation on the wrapped DEK it
+// stores — taken from the key ring, not the old hardcoded default — so a
+// value written while the active KEK is v7 is labelled v7, and a later
+// rotation selects it correctly rather than trying the wrong key.
+func TestPostgresStoreInsertStampsActiveKEKVersion(t *testing.T) {
+	env := newDataTestEnv(t)
+	ce := newCryptoEnvAtVersion(t, 7)
+	tenant := newTenantID(t, env)
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
+
+	id, err := store.Insert(context.Background(), RecordInput{
+		Entity: "patient",
+		Fields: []FieldInput{{Name: "ssn", Type: "string", Value: "123-45-6789", Encrypted: true}},
+	})
+	if err != nil {
+		t.Fatalf("Insert: %v", err)
+	}
+	v, ok := ce.Keys.Version(keystore.Key{TenantID: tenant, RecordID: id, FieldName: "ssn"})
+	if !ok {
+		t.Fatal("no wrapped DEK stored for the encrypted ssn field")
+	}
+	if v != 7 {
+		t.Errorf("stored kek_version = %d, want 7 (the active generation, not a hardcoded default)", v)
+	}
+}
+
 // An Insert field flagged Encrypted is genuinely ciphertext at rest, while
 // a plaintext field lands in value_text. This is the write half of the
 // encryption guarantee whose read half TestPostgresStoreDecryptsEncryptedFields
 // covers.
 func TestPostgresStoreInsertEncryptsFlaggedFieldsAtRest(t *testing.T) {
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 
 	id, err := store.Insert(context.Background(), RecordInput{
 		Entity: "patient",
@@ -78,6 +103,29 @@ func TestPostgresStoreInsertEncryptsFlaggedFieldsAtRest(t *testing.T) {
 	}
 	if bytes.Contains(raw, []byte("123-45-6789")) {
 		t.Fatal("ssn ciphertext at rest contains the plaintext")
+	}
+
+	// The write is an envelope write: a wrapped DEK for the field landed in
+	// the key store, keyed by (tenant, record, field). Without it the
+	// ciphertext would be unrecoverable — so its presence is the write half
+	// of crypto-shreddability.
+	wrapped, _, found, err := ce.Keys.Fetch(context.Background(), keystore.Key{
+		TenantID: tenant, RecordID: id, FieldName: "ssn",
+	})
+	if err != nil {
+		t.Fatalf("keystore Fetch: %v", err)
+	}
+	if !found || len(wrapped) == 0 {
+		t.Fatal("no wrapped DEK stored for the encrypted ssn field")
+	}
+	// The stored key is wrapped, not the raw DEK: unwrapping it must
+	// succeed and yield a 32-byte AES-256 DEK.
+	dek, err := ce.Wrapper.Unwrap(wrapped)
+	if err != nil {
+		t.Fatalf("unwrapping stored DEK: %v", err)
+	}
+	if len(dek) != crypto.DEKSize {
+		t.Errorf("unwrapped DEK is %d bytes, want %d", len(dek), crypto.DEKSize)
 	}
 
 	// The plaintext field is stored in value_text, not encrypted.
@@ -100,11 +148,9 @@ func TestPostgresStoreInsertEncryptsFlaggedFieldsAtRest(t *testing.T) {
 // trail the access-review and analysis surfaces will draw on.
 func TestPostgresStoreInsertPersistsSpans(t *testing.T) {
 	env := newDataTestEnv(t)
+	ce := newCryptoEnv(t)
 	tenant := newTenantID(t, env)
-	store, err := NewPostgresStore(connectAsAPIRole(t, env), tenant, testEncKey)
-	if err != nil {
-		t.Fatalf("NewPostgresStore: %v", err)
-	}
+	store := newRecordStore(t, connectAsAPIRole(t, env), tenant, ce)
 
 	id, err := store.Insert(context.Background(), RecordInput{
 		Entity: "patient",

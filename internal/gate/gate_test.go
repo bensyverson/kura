@@ -73,12 +73,12 @@ func (h *harness) token(t *testing.T, principalID string, roles ...string) strin
 }
 
 func patientFetcher() Fetcher {
-	return func(_ context.Context) (map[string]string, error) {
-		return map[string]string{
+	return func(_ context.Context) (Record, error) {
+		return Record{Fields: map[string]string{
 			"full_name": "Jane Doe",
 			"email":     "jane@example.com",
 			"account":   "ACCT-555",
-		}, nil
+		}}, nil
 	}
 }
 
@@ -171,8 +171,8 @@ func TestAccessRedactsSpanLevelAndIsDriftSafe(t *testing.T) {
 	// manifest never declared for this entity, so the authorization
 	// decision never classified it. It must still be masked: a category
 	// the decision did not make visible is not visible.
-	fetch := func(_ context.Context) (map[string]string, error) {
-		return map[string]string{"full_name": "Jane Doe 555-1234"}, nil
+	fetch := func(_ context.Context) (Record, error) {
+		return Record{Fields: map[string]string{"full_name": "Jane Doe 555-1234"}}, nil
 	}
 	res, err := h.gate.Access(context.Background(), AccessRequest{
 		Token: tok, Action: cedar.ActionRead, Entity: "patient", ResourceID: "p1",
@@ -188,12 +188,45 @@ func TestAccessRedactsSpanLevelAndIsDriftSafe(t *testing.T) {
 	}
 }
 
+func TestAccessSurfacesErasedFields(t *testing.T) {
+	h := newHarness(t)
+	tok := h.token(t, "alice", "admin")
+
+	// The fetcher reports a record whose "account" field was crypto-shredded:
+	// its DEK is gone, so the value is absent from Fields and named in Erased.
+	// This is the erasure happy path — a normal, non-failing read.
+	fetch := func(_ context.Context) (Record, error) {
+		return Record{
+			Fields: map[string]string{"full_name": "Jane Doe"},
+			Erased: []string{"account"},
+		}, nil
+	}
+	res, err := h.gate.Access(context.Background(), AccessRequest{
+		Token: tok, Action: cedar.ActionRead, Entity: "patient", ResourceID: "p1",
+	}, fetch)
+	if err != nil {
+		t.Fatalf("Access of a partially erased record: want no error, got %v", err)
+	}
+	if len(res.Erased) != 1 || res.Erased[0] != "account" {
+		t.Errorf("res.Erased = %v, want [account] surfaced through the gate", res.Erased)
+	}
+	// The erased field is never surfaced as a value — not plaintext, not
+	// ciphertext, not the redaction sentinel.
+	if _, present := res.Fields["account"]; present {
+		t.Errorf("erased field leaked into Fields: %q", res.Fields["account"])
+	}
+	// A visible, non-erased field still comes through.
+	if res.Fields["full_name"] != "Jane Doe" {
+		t.Errorf("full_name = %q, want plaintext", res.Fields["full_name"])
+	}
+}
+
 func TestAccessRejectsAnInvalidToken(t *testing.T) {
 	h := newHarness(t)
 	fetched := false
-	fetch := func(_ context.Context) (map[string]string, error) {
+	fetch := func(_ context.Context) (Record, error) {
 		fetched = true
-		return nil, nil
+		return Record{}, nil
 	}
 
 	_, err := h.gate.Access(context.Background(), AccessRequest{
@@ -217,9 +250,9 @@ func TestAccessDeniedAuthorizationReturnsErrDeniedAndDoesNotFetch(t *testing.T) 
 	// An auditor may read/list but not delete.
 	tok := h.token(t, "carol", "auditor")
 	fetched := false
-	fetch := func(_ context.Context) (map[string]string, error) {
+	fetch := func(_ context.Context) (Record, error) {
 		fetched = true
-		return nil, nil
+		return Record{}, nil
 	}
 
 	_, err := h.gate.Access(context.Background(), AccessRequest{
@@ -254,8 +287,8 @@ func TestAccessUnknownEntityReturnsError(t *testing.T) {
 func TestAccessPropagatesFetchError(t *testing.T) {
 	h := newHarness(t)
 	tok := h.token(t, "alice", "admin")
-	fetch := func(_ context.Context) (map[string]string, error) {
-		return nil, errors.New("database unreachable")
+	fetch := func(_ context.Context) (Record, error) {
+		return Record{}, errors.New("database unreachable")
 	}
 
 	_, err := h.gate.Access(context.Background(), AccessRequest{

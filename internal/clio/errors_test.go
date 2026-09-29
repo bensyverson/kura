@@ -32,7 +32,7 @@ func TestCLIErrorPrefixIsGreppable(t *testing.T) {
 			line := c.err.Error()
 			// First line is the greppable contract. Multi-line errors are
 			// allowed but the agent must be able to match on the first.
-			first := strings.SplitN(line, "\n", 2)[0]
+			first, _, _ := strings.Cut(line, "\n")
 			if !strings.HasPrefix(first, "whoami: ") &&
 				!strings.HasPrefix(first, "user get: ") &&
 				!strings.HasPrefix(first, "user add: ") {

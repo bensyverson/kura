@@ -64,6 +64,8 @@ func newJobsTestHarness(t *testing.T) *jobsTestHarness {
 			Gate:     g,
 			Records:  data.NewMemStore(),
 			Writer:   data.NewMemStore(),
+			Edges:    data.NewMemStore(),
+			Eraser:   &fakeEraser{},
 			Users:    users,
 			IdP:      identity.NewFakeDirectory(),
 			Audit:    store,

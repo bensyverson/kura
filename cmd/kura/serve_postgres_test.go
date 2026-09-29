@@ -55,10 +55,22 @@ func freshServeTestDSN(t *testing.T) string {
 // ones — the dev/E2E path. The resulting Config is one server.New accepts.
 func TestServeConfigSelectsPostgresStores(t *testing.T) {
 	dsn := freshServeTestDSN(t)
+	ksDSN := freshServeTestDSN(t)
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = dsn
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-record-encryption-key"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+
+	// The migrator/owner connection is a separate required credential. In
+	// production it is the kura_admin DSN; the test harness points both the
+	// runtime and migrator connections at the same fresh superuser database.
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
+
+	// The key store is a physically separate instance (ADR 0002); the test
+	// harness stands it up as a second fresh database on the same cluster,
+	// runtime and migrator connections pointed at it.
+	env["KURA_KEYSTORE_DATABASE_URL"] = ksDSN
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = ksDSN
 
 	cfg, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] })
 	if err != nil {
@@ -81,10 +93,16 @@ func TestServeConfigSelectsPostgresStores(t *testing.T) {
 // database — never a manual step — so the wiring must trigger it.
 func TestServeConfigMigratesConfiguredDatabase(t *testing.T) {
 	dsn := freshServeTestDSN(t)
+	ksDSN := freshServeTestDSN(t)
 	env := serveEnv(t)
 	env["KURA_DATABASE_URL"] = dsn
 	env["KURA_DB_TENANT_ID"] = "11111111-1111-1111-1111-111111111111"
-	env["KURA_RECORD_ENCRYPTION_KEY"] = "test-record-encryption-key"
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+	// Migrations run on the migrator/owner connection; in the test harness it
+	// targets the same fresh superuser database as the runtime connection.
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
+	env["KURA_KEYSTORE_DATABASE_URL"] = ksDSN
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = ksDSN
 
 	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
 		t.Fatalf("serveConfig with KURA_DATABASE_URL: %v", err)
@@ -107,5 +125,57 @@ func TestServeConfigMigratesConfiguredDatabase(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("schema version after serveConfig = %d, want %d — migrations did not run on startup", got, want)
+	}
+}
+
+const appendOnlyManifestJSON = `{
+  "version": "1",
+  "entities": [
+    { "name": "person", "fields": [ { "name": "id", "type": "string" } ] },
+    { "name": "event", "append_only": true, "fields": [ { "name": "id", "type": "string" } ] }
+  ]
+}`
+
+// serveConfig reconciles the append-only entity set from the manifest at
+// startup: after boot, every entity the manifest marks append_only is present
+// in kura.append_only_entities for the configured tenant (written on the
+// elevated connection), and an entity that is not append_only is absent.
+func TestServeConfigReconcilesAppendOnlySet(t *testing.T) {
+	dsn := freshServeTestDSN(t)
+	ksDSN := freshServeTestDSN(t)
+	const tenant = "11111111-1111-1111-1111-111111111111"
+	env := serveEnv(t)
+	env["KURA_DATABASE_URL"] = dsn
+	env["KURA_ADMIN_DATABASE_URL"] = dsn
+	env["KURA_KEYSTORE_DATABASE_URL"] = ksDSN
+	env["KURA_KEYSTORE_ADMIN_DATABASE_URL"] = ksDSN
+	env["KURA_DB_TENANT_ID"] = tenant
+	env["FIELD_ENCRYPTION_KEY"] = testKEK
+	env["KURA_MANIFEST_PATH"] = writeManifest(t, appendOnlyManifestJSON)
+
+	if _, err := serveConfig("127.0.0.1:8080", func(k string) string { return env[k] }); err != nil {
+		t.Fatalf("serveConfig with append-only manifest: %v", err)
+	}
+
+	pool, err := db.Open(dsn)
+	if err != nil {
+		t.Fatalf("connecting to reconciled database: %v", err)
+	}
+	defer pool.Close()
+
+	count := func(entity string) int {
+		var n int
+		if err := pool.QueryRowContext(context.Background(),
+			`SELECT count(*) FROM kura.append_only_entities WHERE tenant_id = $1 AND entity = $2`,
+			tenant, entity).Scan(&n); err != nil {
+			t.Fatalf("reading append-only set for %q: %v", entity, err)
+		}
+		return n
+	}
+	if count("event") != 1 {
+		t.Error("append-only 'event' was not reconciled into the set at startup")
+	}
+	if count("person") != 0 {
+		t.Error("'person' is not append_only but appeared in the set")
 	}
 }

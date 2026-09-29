@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"maps"
+	"slices"
+	"sort"
 	"sync"
 )
 
@@ -26,18 +28,30 @@ import (
 // a store failure, so Get reports it through its ok return.
 var ErrNotFound = errors.New("data: record not found")
 
-// Record is one stored record: its id and its raw field values. The
-// values are exactly as stored — unmasked. Masking happens in the gate,
-// never here.
+// Record is one stored record: its id, its monotonic sequence, and its raw
+// field values. The values are exactly as stored — unmasked. Masking
+// happens in the gate, never here.
+//
+// Seq is the record's value from the one shared sequence assigned at insert
+// (migration 0007). It is a deterministic, clock-skew-immune order key for
+// "events for a subject, ordered"; created_at carries wall-clock meaning but
+// is not the order key.
 type Record struct {
 	ID     string
+	Seq    int64
 	Fields map[string]string
+	// Erased names the fields whose per-value DEK has been crypto-shredded.
+	// Such a field is absent from Fields — its value is permanently
+	// unrecoverable by design — but the record still reports it here, so a
+	// reader sees that the field existed and was erased rather than that it
+	// was never set. Nil for a record with nothing erased.
+	Erased []string
 }
 
 // clone returns a deep copy of r, so a record handed out by a store can
 // be mutated by the caller without corrupting the stored copy.
 func (r Record) clone() Record {
-	return Record{ID: r.ID, Fields: maps.Clone(r.Fields)}
+	return Record{ID: r.ID, Seq: r.Seq, Fields: maps.Clone(r.Fields), Erased: slices.Clone(r.Erased)}
 }
 
 // RecordStore reads stored records. It is the seam the gate's data-read
@@ -67,6 +81,14 @@ type RecordStore interface {
 type MemStore struct {
 	mu       sync.RWMutex
 	byEntity map[string][]Record
+	// edges holds relationship edges between records, the fake's stand-in
+	// for kura.record_edges. They are read by EdgesByTarget/EdgesBySource.
+	edges []Edge
+	// seq is the in-memory stand-in for the database's shared record
+	// sequence (migration 0007): one counter across all entities, so the
+	// fake assigns the same monotonic, globally-ordered seq the Postgres
+	// store reads back from kura.records.
+	seq int64
 }
 
 var _ RecordStore = (*MemStore)(nil)
@@ -82,14 +104,44 @@ func NewMemStore() *MemStore {
 func (m *MemStore) Put(entity string, rec Record) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	m.putLocked(entity, rec)
+}
+
+// putLocked stores rec under entity and returns the seq it was stored with.
+// The caller must hold m.mu. It is the shared core of Put and Insert, so a
+// record and its edges can be written under one lock.
+func (m *MemStore) putLocked(entity string, rec Record) int64 {
 	recs := m.byEntity[entity]
 	for i := range recs {
 		if recs[i].ID == rec.ID {
+			// seq is assigned once at insert and never changes (there is no
+			// update path); a replace keeps the original record's seq.
+			rec.Seq = recs[i].Seq
 			recs[i] = rec.clone()
-			return
+			return rec.Seq
 		}
 	}
+	// A new record draws the next value from the shared sequence, mirroring
+	// the database's DEFAULT nextval at INSERT — so any caller-supplied Seq
+	// is overwritten, exactly as the database ignores it.
+	m.seq++
+	rec.Seq = m.seq
 	m.byEntity[entity] = append(recs, rec.clone())
+	return rec.Seq
+}
+
+// hasRecordLocked reports whether a record with the given id exists under any
+// entity. The caller must hold m.mu. It is the fake's stand-in for the
+// edges' foreign key: an edge may only target a record that exists.
+func (m *MemStore) hasRecordLocked(id string) bool {
+	for _, recs := range m.byEntity {
+		for i := range recs {
+			if recs[i].ID == id {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Get returns the record with the given id under entity.
@@ -131,4 +183,35 @@ func (m *MemStore) Count(_ context.Context, entity string) (int, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.byEntity[entity]), nil
+}
+
+var _ EdgeReader = (*MemStore)(nil)
+
+// EdgesByTarget returns every edge whose target is targetID, ordered by the
+// source record's seq — mirroring the Postgres store's join-and-order so a
+// subject's referencing records read back in deterministic order.
+func (m *MemStore) EdgesByTarget(_ context.Context, targetID string) ([]Edge, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Edge
+	for _, e := range m.edges {
+		if e.TargetID == targetID {
+			out = append(out, e)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].SourceSeq < out[j].SourceSeq })
+	return out, nil
+}
+
+// EdgesBySource returns every edge originating from sourceID.
+func (m *MemStore) EdgesBySource(_ context.Context, sourceID string) ([]Edge, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	var out []Edge
+	for _, e := range m.edges {
+		if e.SourceID == sourceID {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }

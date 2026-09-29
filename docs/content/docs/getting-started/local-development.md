@@ -97,5 +97,6 @@ Read the seeded data back as two different principals and the
 The admin role sees every PII category; the user role sees everything
 except the high-sensitivity ones, which stay masked. Same record, same
 endpoint — the gate masks per the caller's policy. The SSN is also stored
-**encrypted** at rest, because the manifest declares it a high-sensitivity
-category.
+**encrypted** at rest — not because it is high-sensitivity, but because it
+is a content field, and content encrypts by default. Sensitivity governs
+*masking*; the field *type* governs encryption, and the two are decoupled.

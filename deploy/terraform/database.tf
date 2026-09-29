@@ -31,9 +31,28 @@ resource "digitalocean_database_db" "kura" {
 
 # The API server's own database user, with rights to the application schema
 # only — never a superuser (doc 03: per-component users, minimum privilege).
+# Granted the kura_api role during provisioning: read/write the application
+# data, no DDL, no role management, and — critically — no access to the
+# append-only set (kura.append_only_entities), so a compromised runtime
+# credential cannot unfreeze an entity the manifest marked insert-only.
 resource "digitalocean_database_user" "api" {
   cluster_id = digitalocean_database_cluster.kura.id
   name       = "${local.name}-api"
+}
+
+# The migrator/owner database user — the elevated startup credential,
+# granted the kura_admin role during provisioning. Credential-domain
+# separation, mirroring the object-storage posture (the admin Spaces keys
+# administer the bucket; the runtime keys only append): this user owns
+# schema evolution and the append-only objects (the SECURITY DEFINER trigger
+# and kura.append_only_entities), while the runtime "api" user above cannot
+# touch them. The server uses this DSN (KURA_ADMIN_DATABASE_URL) only at
+# startup, for migrations and append-only reconciliation; the runtime
+# request path uses the "api" user. Not a superuser and not BYPASSRLS —
+# kura_admin stays tenant-isolation bound like every other component role.
+resource "digitalocean_database_user" "migrator" {
+  cluster_id = digitalocean_database_cluster.kura.id
+  name       = "${local.name}-migrator"
 }
 
 # Trusted sources: only the tagged droplets may connect. This is the

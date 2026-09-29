@@ -21,6 +21,7 @@ type fakeDataServer struct {
 	t         *testing.T
 	mu        sync.Mutex
 	records   map[string]map[string]map[string]string // entity -> id -> fields
+	erased    map[string]map[string][]string          // entity -> id -> erased field names
 	pageOrder map[string][]string                     // entity -> ordered ids
 	calls     []dataCall
 }
@@ -35,6 +36,7 @@ func newFakeDataServer(t *testing.T) *fakeDataServer {
 	return &fakeDataServer{
 		t:         t,
 		records:   map[string]map[string]map[string]string{},
+		erased:    map[string]map[string][]string{},
 		pageOrder: map[string][]string{},
 	}
 }
@@ -49,6 +51,19 @@ func (f *fakeDataServer) put(entity, id string, fields map[string]string) {
 		f.pageOrder[entity] = append(f.pageOrder[entity], id)
 	}
 	f.records[entity][id] = fields
+}
+
+// putErased seeds a record whose named fields were crypto-shredded: those
+// fields are absent from the fields map and reported in the record's erased
+// list, exactly as the real server returns a partially erased record.
+func (f *fakeDataServer) putErased(entity, id string, fields map[string]string, erased []string) {
+	f.put(entity, id, fields)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if _, ok := f.erased[entity]; !ok {
+		f.erased[entity] = map[string][]string{}
+	}
+	f.erased[entity][id] = erased
 }
 
 func (f *fakeDataServer) handler() http.Handler {
@@ -74,6 +89,7 @@ func (f *fakeDataServer) handler() http.Handler {
 		type rec struct {
 			ID     string            `json:"id"`
 			Fields map[string]string `json:"fields"`
+			Erased []string          `json:"erased,omitempty"`
 		}
 		page := struct {
 			Records []rec `json:"records"`
@@ -83,7 +99,7 @@ func (f *fakeDataServer) handler() http.Handler {
 		end := min(offset+limit, len(order))
 		if offset < len(order) {
 			for _, id := range order[offset:end] {
-				page.Records = append(page.Records, rec{ID: id, Fields: f.records[entity][id]})
+				page.Records = append(page.Records, rec{ID: id, Fields: f.records[entity][id], Erased: f.erased[entity][id]})
 			}
 		}
 		_ = json.NewEncoder(w).Encode(page)
@@ -99,7 +115,10 @@ func (f *fakeDataServer) handler() http.Handler {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(fields)
+		_ = json.NewEncoder(w).Encode(struct {
+			Fields map[string]string `json:"fields"`
+			Erased []string          `json:"erased,omitempty"`
+		}{Fields: fields, Erased: f.erased[entity][id]})
 	})
 	return mux
 }
@@ -211,6 +230,57 @@ func TestShowSurfacesServerMaskingUnchanged(t *testing.T) {
 	}
 	if got.Fields["age"] != "30" {
 		t.Errorf("json age = %q, want 30", got.Fields["age"])
+	}
+}
+
+// hYT (CLI show): a field whose DEK was crypto-shredded renders with the
+// erased sentinel — in both Markdown and JSON — never a value and never an
+// error, so a reader can tell an erased field apart from an absent one.
+func TestShowSurfacesErasedField(t *testing.T) {
+	fake := newFakeDataServer(t)
+	fake.putErased("patient", "p1", map[string]string{"full_name": "Ada Lovelace"}, []string{"account"})
+	server := setupDataCLITest(t, fake)
+
+	md, _, err := runRoot(t, "show", "patient", "p1", "--server", server)
+	if err != nil {
+		t.Fatalf("show markdown: %v", err)
+	}
+	if !strings.Contains(md.String(), "account") || !strings.Contains(md.String(), erasedValue) {
+		t.Errorf("markdown view should show the erased field with the %q sentinel:\n%s", erasedValue, md.String())
+	}
+
+	js, _, err := runRoot(t, "show", "patient", "p1", "--server", server, "--json")
+	if err != nil {
+		t.Fatalf("show json: %v", err)
+	}
+	var got struct {
+		Fields map[string]string `json:"fields"`
+		Erased []string          `json:"erased"`
+	}
+	if err := json.NewDecoder(&js).Decode(&got); err != nil {
+		t.Fatalf("decode show json: %v", err)
+	}
+	if len(got.Erased) != 1 || got.Erased[0] != "account" {
+		t.Errorf("json erased = %v, want [account]", got.Erased)
+	}
+	if _, present := got.Fields["account"]; present {
+		t.Errorf("erased field leaked a value into json fields: %q", got.Fields["account"])
+	}
+}
+
+// hYT (CLI query): the inline list view marks an erased field with the
+// sentinel too, so a listing of records with erased fields reads normally.
+func TestQuerySurfacesErasedField(t *testing.T) {
+	fake := newFakeDataServer(t)
+	fake.putErased("patient", "p1", map[string]string{"full_name": "Ada Lovelace"}, []string{"account"})
+	server := setupDataCLITest(t, fake)
+
+	md, _, err := runRoot(t, "query", "patient", "--server", server)
+	if err != nil {
+		t.Fatalf("query markdown: %v", err)
+	}
+	if !strings.Contains(md.String(), "account") || !strings.Contains(md.String(), erasedValue) {
+		t.Errorf("query inline view should mark the erased field with %q:\n%s", erasedValue, md.String())
 	}
 }
 

@@ -627,6 +627,7 @@ h3 {
 .grid .grid-cell { text-align: center; font-variant-numeric: tabular-nums; }
 .grid .yes { color: var(--accent); font-weight: 700; }
 .grid .no { color: var(--text-muted); }
+.grid .na { color: var(--text-muted); font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; opacity: 0.7; }
 
 /* ── Audit log viewer ───────────────────────────────────────────── */
 .filter-form {
@@ -698,6 +699,13 @@ h3 {
 
 /* A quiet "coming soon" marker for a documented-but-unshipped surface. */
 .badge-soon { background: var(--surface-2); color: var(--text-muted); text-transform: none; font-weight: 600; }
+
+/* The erased tag is a factual, permanent state — a value gone by design,
+   not an action to take — so it stays a quiet neutral, distinct from the
+   vermilion PII/attention pigment. The [erased] value marker echoes the
+   CLI's sentinel so the two read the same across surfaces. */
+.badge-erased { background: var(--surface-2); color: var(--text-muted); text-transform: none; font-weight: 600; }
+.erased-value { color: var(--text-muted); font-style: italic; }
 
 /* Wide record tables scroll horizontally rather than overflowing the panel. */
 .table-scroll { overflow-x: auto; margin-top: var(--space-4); }

@@ -1,6 +1,6 @@
 ---
 title: The enforcement gate
-weight: 10
+weight: 11
 ---
 
 "The core is the gate" — made concrete. The `gate` package ties the

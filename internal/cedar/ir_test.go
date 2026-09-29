@@ -1,6 +1,7 @@
 package cedar
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bensyverson/kura/internal/manifest"
@@ -118,6 +119,87 @@ func TestPolicyValidationCatchesBadReferences(t *testing.T) {
 		if err := p.ValidateAgainst(m); err == nil {
 			t.Errorf("%s: expected a validation error, got nil", name)
 		}
+	}
+}
+
+// An append-only entity (order, per the test manifest) is insert-only:
+// a policy granting update or delete on it is rejected with a matchable
+// error, while create/read/list stay grantable and update/delete on a
+// non-append-only entity remain fine.
+func TestAppendOnlyRejectsUpdateDeleteGrants(t *testing.T) {
+	m := testManifest(t) // order is append_only
+
+	for _, a := range []Action{ActionUpdate, ActionDelete} {
+		p := &Policy{
+			Roles:  []Role{{Name: "admin"}},
+			Grants: []Grant{{Role: "admin", Entity: "order", Action: a}},
+		}
+		err := p.ValidateAgainst(m)
+		if err == nil {
+			t.Errorf("granting %q on append-only entity should be rejected", a)
+			continue
+		}
+		if !strings.Contains(err.Error(), "append-only") ||
+			!strings.Contains(err.Error(), "order") ||
+			!strings.Contains(err.Error(), string(a)) {
+			t.Errorf("error should name the append-only entity and action %q: %v", a, err)
+		}
+	}
+
+	for _, a := range []Action{ActionCreate, ActionRead, ActionList} {
+		p := &Policy{
+			Roles:  []Role{{Name: "admin"}},
+			Grants: []Grant{{Role: "admin", Entity: "order", Action: a}},
+		}
+		if err := p.ValidateAgainst(m); err != nil {
+			t.Errorf("granting %q on append-only entity should be allowed: %v", a, err)
+		}
+	}
+
+	// update/delete on a non-append-only entity remain valid.
+	p := &Policy{
+		Roles:  []Role{{Name: "admin"}},
+		Grants: []Grant{{Role: "admin", Entity: "customer", Action: ActionUpdate}},
+	}
+	if err := p.ValidateAgainst(m); err != nil {
+		t.Errorf("update on non-append-only entity should be allowed: %v", err)
+	}
+}
+
+// DefaultPolicy never emits update/delete grants for an append-only
+// entity; create/read/list remain, and non-append-only entities keep the
+// full action set.
+func TestDefaultPolicyOmitsMutationForAppendOnly(t *testing.T) {
+	m := testManifest(t)
+	p := DefaultPolicy(m)
+
+	can := func(role, entity string, a Action) bool {
+		for _, g := range p.Grants {
+			if g.Role == role && g.Entity == entity && g.Action == a {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, role := range []string{"admin", "user"} {
+		if can(role, "order", ActionUpdate) {
+			t.Errorf("%s should not have update on append-only order", role)
+		}
+		if can(role, "order", ActionDelete) {
+			t.Errorf("%s should not have delete on append-only order", role)
+		}
+		if !can(role, "order", ActionCreate) {
+			t.Errorf("%s should still have create on append-only order", role)
+		}
+		if !can(role, "order", ActionRead) {
+			t.Errorf("%s should still have read on append-only order", role)
+		}
+	}
+
+	// A non-append-only entity keeps the full mutation set.
+	if !can("admin", "customer", ActionUpdate) || !can("admin", "customer", ActionDelete) {
+		t.Error("admin should retain update/delete on non-append-only customer")
 	}
 }
 

@@ -18,6 +18,7 @@
     {
       "name": "order",
       "description": "A single purchase.",
+      "append_only": true,
       "fields": [
         { "name": "id", "type": "string", "description": "Stable identifier." },
         { "name": "placed_at", "type": "timestamp", "description": "When the order was placed." },

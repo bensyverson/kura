@@ -39,6 +39,12 @@ type dataBinding func(r *http.Request, p identity.Principal) (gate.AccessRequest
 // touches the ResponseWriter.
 type listBinding func(r *http.Request, p identity.Principal) (gate.ListRequest, gate.ListFetcher, error)
 
+// edgesBinding translates an authenticated request into a gate EdgesRequest
+// and the EdgesFetcher that reads the record's edges. Like the other read
+// bindings it never touches the ResponseWriter: it describes the request and
+// supplies the read, and the handler renders the result.
+type edgesBinding func(r *http.Request, p identity.Principal) (gate.EdgesRequest, gate.EdgesFetcher, error)
+
 // gatedHandler serves a single record. It owns the call to Gate.Access
 // and the serialization of the masked result; the dataBinding it wraps
 // never touches the ResponseWriter.
@@ -68,7 +74,18 @@ func (h *gatedHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeGateError(w, err)
 		return
 	}
-	writeJSON(w, res.Fields)
+	writeJSON(w, recordResponse{Fields: res.Fields, Erased: res.Erased})
+}
+
+// recordResponse is the body of a single-record read: the record's masked
+// fields plus the names of any fields whose per-value DEK was
+// crypto-shredded. A shredded field is omitted from Fields and named in
+// Erased — a normal, non-failing read, never the ciphertext and never an
+// error. Erased is elided when empty, so an ordinary record reads as just
+// its fields.
+type recordResponse struct {
+	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // gatedListHandler serves a bounded, masked page of records. It owns the
@@ -81,11 +98,14 @@ type gatedListHandler struct {
 
 func (*gatedListHandler) gatedThroughCore() {}
 
-// recordJSON is one record in a list response: its id and its masked
-// fields.
+// recordJSON is one record in a list response: its id, its masked fields,
+// and the names of any crypto-shredded fields (see recordResponse). Erased
+// is elided when empty, so a record with nothing erased reads as just its
+// id and fields.
 type recordJSON struct {
 	ID     string            `json:"id"`
 	Fields map[string]string `json:"fields"`
+	Erased []string          `json:"erased,omitempty"`
 }
 
 // listResponse is the body of a list endpoint: the masked page plus the
@@ -117,7 +137,59 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	out := listResponse{Records: make([]recordJSON, len(res.Records)), Limit: res.Limit, Offset: res.Offset}
 	for i, rec := range res.Records {
-		out.Records[i] = recordJSON{ID: rec.ID, Fields: rec.Fields}
+		out.Records[i] = recordJSON{ID: rec.ID, Fields: rec.Fields, Erased: rec.Erased}
+	}
+	writeJSON(w, out)
+}
+
+// gatedEdgesHandler serves a record's relationship edges. It owns the call
+// to Gate.Edges and the serialization of the result; the edgesBinding it
+// wraps never touches the ResponseWriter.
+type gatedEdgesHandler struct {
+	gate    *gate.Gate
+	binding edgesBinding
+}
+
+func (*gatedEdgesHandler) gatedThroughCore() {}
+
+// edgeJSON is one edge in an edges response: the relationship name, the two
+// record ids it connects, and the source record's sequence (its order key).
+type edgeJSON struct {
+	Relationship string `json:"relationship"`
+	SourceID     string `json:"source_id"`
+	SourceSeq    int64  `json:"source_seq"`
+	TargetID     string `json:"target_id"`
+}
+
+// edgesResponse is the body of an edges endpoint: the record's edges, in the
+// order the gate returned them (the store orders incoming edges by the source
+// record's sequence).
+type edgesResponse struct {
+	Edges []edgeJSON `json:"edges"`
+}
+
+// ServeHTTP runs the bound edges request through the gate and writes the
+// edges as JSON. The binding only describes the EdgesRequest and the fetch;
+// the gate authorizes and audits the read.
+func (h *gatedEdgesHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, fetch, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	res, err := h.gate.Edges(r.Context(), req, fetch)
+	if err != nil {
+		writeGateError(w, err)
+		return
+	}
+	out := edgesResponse{Edges: make([]edgeJSON, len(res.Edges))}
+	for i, e := range res.Edges {
+		out.Edges[i] = edgeJSON{Relationship: e.Relationship, SourceID: e.SourceID, SourceSeq: e.SourceSeq, TargetID: e.TargetID}
 	}
 	writeJSON(w, out)
 }
@@ -127,7 +199,7 @@ func (h *gatedListHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // authorized, validated, scanned, and classified it. Like the read
 // bindings it never touches the ResponseWriter: it describes the request
 // and supplies the write, and the handler renders the outcome.
-type ingestBinding func(r *http.Request, p identity.Principal) (gate.IngestRequest, gate.Writer, error)
+type ingestBinding func(r *http.Request, p identity.Principal) (gate.IngestRequest, gate.RecordExists, gate.Writer, error)
 
 // gatedIngestHandler serves a record-ingestion endpoint. It owns the call
 // to Gate.Ingest and the rendering of the new record's id; the
@@ -154,12 +226,12 @@ func (h *gatedIngestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	req, write, err := h.binding(r, principal)
+	req, exists, write, err := h.binding(r, principal)
 	if err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	res, err := h.gate.Ingest(r.Context(), req, write)
+	res, err := h.gate.Ingest(r.Context(), req, exists, write)
 	if err != nil {
 		writeGateError(w, err)
 		return
@@ -221,6 +293,51 @@ func (h *adminHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, result)
 }
 
+// eraseBinding translates an authenticated request into a gate
+// EraseRequest and the Eraser that shreds the named records' keys once
+// authorization passes. Like the other bindings it never touches the
+// ResponseWriter: it describes the request and supplies the shred, and
+// the handler renders the outcome.
+type eraseBinding func(r *http.Request, p identity.Principal) (gate.EraseRequest, gate.Eraser, error)
+
+// gatedEraseHandler serves the crypto-shred erasure endpoint. It owns the
+// call to Gate.Erase; the eraseBinding it wraps never touches the
+// ResponseWriter.
+type gatedEraseHandler struct {
+	gate    *gate.Gate
+	binding eraseBinding
+}
+
+func (*gatedEraseHandler) gatedThroughCore() {}
+
+// eraseResponse is the body of a successful erasure: how many wrapped
+// DEKs were destroyed.
+type eraseResponse struct {
+	Shredded int `json:"shredded"`
+}
+
+// ServeHTTP runs the bound erasure request through the gate and writes the
+// shredded count as JSON. The binding only describes the EraseRequest and
+// the Eraser; the gate authorizes the shred, runs it, and audits it.
+func (h *gatedEraseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	principal, ok := principalFromContext(r.Context())
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	req, eraser, err := h.binding(r, principal)
+	if err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	res, err := h.gate.Erase(r.Context(), req, eraser)
+	if err != nil {
+		writeGateError(w, err)
+		return
+	}
+	writeJSON(w, eraseResponse{Shredded: res.Shredded})
+}
+
 // writeGateError maps an error from the gate to an HTTP status. A denied
 // request is a 403; an unknown entity, a missing record, or a user not
 // on the authorized list is a 404; anything else is a 500 — the gate
@@ -239,6 +356,9 @@ func writeGateError(w http.ResponseWriter, err error) {
 	case errors.Is(err, review.ErrClosed):
 		http.Error(w, "conflict: the review is completed", http.StatusConflict)
 	case errors.Is(err, gate.ErrUnknownField),
+		errors.Is(err, gate.ErrUnknownRelationship),
+		errors.Is(err, gate.ErrCardinality),
+		errors.Is(err, gate.ErrEdgeTarget),
 		errors.Is(err, review.ErrInvalidDecision),
 		errors.Is(err, review.ErrEmptyReview):
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -275,6 +395,16 @@ func (s *Server) registerListData(pattern string, binding listBinding) {
 	s.apiRoutes[pattern] = &gatedListHandler{gate: s.cfg.Gate, binding: binding}
 }
 
+// registerEdges mounts a record's edges route under /api/. Like the other
+// data registrars it produces a gated handler — a *gatedEdgesHandler — so
+// the route goes through the gate by construction.
+func (s *Server) registerEdges(pattern string, binding edgesBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &gatedEdgesHandler{gate: s.cfg.Gate, binding: binding}
+}
+
 // registerAdmin mounts an administrative route under /api/. Like the
 // data registrars it produces a gated handler — a *adminHandler — so the
 // route delegates to Gate.Admin by construction.
@@ -293,4 +423,14 @@ func (s *Server) registerIngest(pattern string, binding ingestBinding) {
 		s.apiRoutes = make(map[string]gatedRoute)
 	}
 	s.apiRoutes[pattern] = &gatedIngestHandler{gate: s.cfg.Gate, binding: binding}
+}
+
+// registerErase mounts the crypto-shred erasure route under /api/. Like
+// the other registrars it produces a gated handler — a *gatedEraseHandler
+// — so every erasure goes through Gate.Erase by construction.
+func (s *Server) registerErase(pattern string, binding eraseBinding) {
+	if s.apiRoutes == nil {
+		s.apiRoutes = make(map[string]gatedRoute)
+	}
+	s.apiRoutes[pattern] = &gatedEraseHandler{gate: s.cfg.Gate, binding: binding}
 }

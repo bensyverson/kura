@@ -3,12 +3,12 @@
 <section class="panel">
   <span class="eyebrow"><a href="/data">Data browser</a> · <a href="/data/{{.Entity}}">{{.Entity}}</a> · Record</span>
   <h1 class="mono">{{.ID}}</h1>
-  <p class="muted">Field values are masked to your access — the dashboard renders exactly what the server returns and never unmasks. A <span class="badge badge-pii">PII</span> tag marks a field that carries personal data.</p>
+  <p class="muted">Field values are masked to your access — the dashboard renders exactly what the server returns and never unmasks. A <span class="badge badge-pii">PII</span> tag marks a field that carries personal data; an <span class="badge badge-erased">erased</span> tag marks a field whose value was permanently destroyed by crypto-shredding.</p>
 
   <dl class="facts record-facts">
     {{range .Fields}}
-    <dt>{{.Name}}{{if .PII}} <span class="badge badge-pii" title="PII category: {{.PII}}">{{.PII}}</span>{{end}}</dt>
-    <dd class="mono">{{if .Value}}{{.Value}}{{else}}<span class="muted">&mdash;</span>{{end}}</dd>
+    <dt>{{.Name}}{{if .PII}} <span class="badge badge-pii" title="PII category: {{.PII}}">{{.PII}}</span>{{end}}{{if .Erased}} <span class="badge badge-erased" title="This field's value was erased — its encryption key was crypto-shredded and it can never be decrypted">erased</span>{{end}}</dt>
+    <dd class="mono">{{if .Erased}}<span class="erased-value">[erased]</span>{{else if .Value}}{{.Value}}{{else}}<span class="muted">&mdash;</span>{{end}}</dd>
     {{end}}
   </dl>
 

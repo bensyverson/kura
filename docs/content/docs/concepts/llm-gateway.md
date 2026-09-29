@@ -1,6 +1,6 @@
 ---
 title: LLM access gateway
-weight: 9
+weight: 10
 ---
 
 Calls to an LLM provider — Anthropic by default — leave Kura through one

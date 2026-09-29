@@ -24,18 +24,22 @@ type fakeIngestServer struct {
 }
 
 type ingestCall struct {
-	entity string
-	fields map[string]string
+	entity        string
+	fields        map[string]string
+	relationships map[string][]string
 }
 
 func (f *fakeIngestServer) handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/{entity}", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		var fields map[string]string
-		_ = json.Unmarshal(body, &fields)
+		var rec struct {
+			Fields        map[string]string   `json:"fields"`
+			Relationships map[string][]string `json:"relationships"`
+		}
+		_ = json.Unmarshal(body, &rec)
 		f.mu.Lock()
-		f.posted = append(f.posted, ingestCall{entity: r.PathValue("entity"), fields: fields})
+		f.posted = append(f.posted, ingestCall{entity: r.PathValue("entity"), fields: rec.Fields, relationships: rec.Relationships})
 		f.nextID++
 		id := f.nextID
 		fail := f.failStatus
@@ -117,7 +121,7 @@ func TestIngestCommandIsWired(t *testing.T) {
 func TestIngestSendsRecordArrayAndReportsIDs(t *testing.T) {
 	fake := &fakeIngestServer{}
 	server := setupIngestCLI(t, fake)
-	file := writeJSONFile(t, `[{"full_name":"Jane Doe"},{"full_name":"John Roe"}]`)
+	file := writeJSONFile(t, `[{"fields":{"full_name":"Jane Doe"}},{"fields":{"full_name":"John Roe"}}]`)
 
 	stdout, _, err := runRoot(t, "ingest", "patient", "--file", file, "--server", server)
 	if err != nil {
@@ -144,7 +148,7 @@ func TestIngestSendsRecordArrayAndReportsIDs(t *testing.T) {
 func TestIngestSendsSingleObject(t *testing.T) {
 	fake := &fakeIngestServer{}
 	server := setupIngestCLI(t, fake)
-	file := writeJSONFile(t, `{"full_name":"Solo"}`)
+	file := writeJSONFile(t, `{"fields":{"full_name":"Solo"}}`)
 
 	if _, _, err := runRoot(t, "ingest", "patient", "--file", file, "--server", server); err != nil {
 		t.Fatalf("ingest: %v", err)
@@ -154,12 +158,35 @@ func TestIngestSendsSingleObject(t *testing.T) {
 	}
 }
 
+// Relationships supplied on a record are sent to the server alongside the
+// fields — the create-with-relationships path through the CLI.
+func TestIngestSendsRelationships(t *testing.T) {
+	fake := &fakeIngestServer{}
+	server := setupIngestCLI(t, fake)
+	file := writeJSONFile(t, `{"fields":{"full_name":"Jane"},"relationships":{"primary_provider":["prov-1"],"care_team":["a","b"]}}`)
+
+	if _, _, err := runRoot(t, "ingest", "patient", "--file", file, "--server", server); err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	calls := fake.calls()
+	if len(calls) != 1 {
+		t.Fatalf("server received %d POSTs, want 1", len(calls))
+	}
+	rels := calls[0].relationships
+	if len(rels["primary_provider"]) != 1 || rels["primary_provider"][0] != "prov-1" {
+		t.Errorf("primary_provider = %v, want [prov-1]", rels["primary_provider"])
+	}
+	if len(rels["care_team"]) != 2 || rels["care_team"][0] != "a" || rels["care_team"][1] != "b" {
+		t.Errorf("care_team = %v, want [a b]", rels["care_team"])
+	}
+}
+
 // With no --file, records are read from stdin.
 func TestIngestReadsStdin(t *testing.T) {
 	fake := &fakeIngestServer{}
 	server := setupIngestCLI(t, fake)
 
-	if _, _, err := runRootStdin(t, `{"full_name":"Piped"}`, "ingest", "patient", "--server", server); err != nil {
+	if _, _, err := runRootStdin(t, `{"fields":{"full_name":"Piped"}}`, "ingest", "patient", "--server", server); err != nil {
 		t.Fatalf("ingest: %v", err)
 	}
 	if calls := fake.calls(); len(calls) != 1 || calls[0].fields["full_name"] != "Piped" {
@@ -171,7 +198,7 @@ func TestIngestReadsStdin(t *testing.T) {
 func TestIngestRequiresEntity(t *testing.T) {
 	fake := &fakeIngestServer{}
 	server := setupIngestCLI(t, fake)
-	if _, _, err := runRootStdin(t, `{"full_name":"x"}`, "ingest", "--server", server); err == nil {
+	if _, _, err := runRootStdin(t, `{"fields":{"full_name":"x"}}`, "ingest", "--server", server); err == nil {
 		t.Fatal("ingest with no entity returned no error")
 	}
 }
@@ -181,7 +208,7 @@ func TestIngestRequiresEntity(t *testing.T) {
 func TestIngestSurfacesServerError(t *testing.T) {
 	fake := &fakeIngestServer{failStatus: http.StatusForbidden}
 	server := setupIngestCLI(t, fake)
-	file := writeJSONFile(t, `{"full_name":"x"}`)
+	file := writeJSONFile(t, `{"fields":{"full_name":"x"}}`)
 	if _, _, err := runRoot(t, "ingest", "patient", "--file", file, "--server", server); err == nil {
 		t.Fatal("ingest against a forbidding server returned no error")
 	}

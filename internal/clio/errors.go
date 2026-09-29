@@ -128,8 +128,7 @@ func ExitCode(err error) int {
 	if err == nil {
 		return 0
 	}
-	var ce *Error
-	if errors.As(err, &ce) {
+	if ce, ok := errors.AsType[*Error](err); ok {
 		switch ce.Kind {
 		case KindUsage:
 			return 2

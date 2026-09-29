@@ -4,13 +4,22 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
 )
 
+// Two independent lineages, embedded separately. The main set lives at the
+// package root and targets the kura database; the keystore set lives under
+// keystore/ and targets the physically separate key-store instance (ADR
+// 0002). Each is numbered from 1 on its own — they are never interleaved.
+//
 //go:embed *.sql
-var sqlFiles embed.FS
+var mainFiles embed.FS
+
+//go:embed keystore/*.sql
+var keystoreFiles embed.FS
 
 // Migration is one forward-only schema change: its sequence number, its
 // human-readable name, and the SQL that applies it.
@@ -20,13 +29,26 @@ type Migration struct {
 	SQL    string
 }
 
-// All returns every embedded migration, ordered by sequence number. It
-// errors if a filename is malformed or if the numbers are not a
-// contiguous 1-based run — a gap or a duplicate means a migration was
-// lost or misnamed, and applying a partial schema must fail loudly rather
-// than silently.
+// All returns the main lineage — every migration at the package root,
+// ordered by sequence number. See load for the contiguity guarantee.
 func All() ([]Migration, error) {
-	entries, err := fs.ReadDir(sqlFiles, ".")
+	return load(mainFiles, ".")
+}
+
+// Keystore returns the key-store lineage from keystore/, ordered by sequence
+// number. It is numbered independently of the main set and applied against
+// the separate key-store DSN.
+func Keystore() ([]Migration, error) {
+	return load(keystoreFiles, "keystore")
+}
+
+// load reads the .sql files in dir of fsys into an ordered Migration slice.
+// It errors if a filename is malformed or if the numbers are not a
+// contiguous 1-based run — a gap or a duplicate means a migration was lost
+// or misnamed, and applying a partial schema must fail loudly rather than
+// silently.
+func load(fsys fs.FS, dir string) ([]Migration, error) {
+	entries, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +62,7 @@ func All() ([]Migration, error) {
 		if err != nil {
 			return nil, err
 		}
-		sql, err := sqlFiles.ReadFile(e.Name())
+		sql, err := fs.ReadFile(fsys, path.Join(dir, e.Name()))
 		if err != nil {
 			return nil, err
 		}

@@ -45,6 +45,19 @@ func TestComponentRolesExistWithMinimumPrivilege(t *testing.T) {
 		t.Error("kura_api was able to CREATE TABLE — it must not hold DDL rights")
 	}
 
+	// kura_admin is the migrator/owner: the elevated startup credential
+	// (KURA_ADMIN_DATABASE_URL) connects as this role to run migrations and
+	// own schema objects — the append-only trigger and set among them — that
+	// the runtime kura_api role above must never own. Assert it positively
+	// holds the DDL kura_api lacks, so the credential separation is real and
+	// not just two names for the same privilege.
+	admin := connectAsRole(ctx, t, env, "kura_admin")
+	if _, err := admin.ExecContext(ctx, `CREATE TABLE kura.admin_ddl_probe (x integer)`); err != nil {
+		t.Errorf("kura_admin could not CREATE TABLE — the migrator/owner must hold DDL: %v", err)
+	} else if _, err := admin.ExecContext(ctx, `DROP TABLE kura.admin_ddl_probe`); err != nil {
+		t.Errorf("kura_admin could not DROP its own table: %v", err)
+	}
+
 	// kura_audit is strictly read-only: it can SELECT but not write.
 	audit := connectAsRole(ctx, t, env, "kura_audit")
 	if _, err := audit.QueryContext(ctx, `SELECT 1 FROM kura.records`); err != nil {

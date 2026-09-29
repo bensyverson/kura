@@ -1,6 +1,6 @@
 ---
 title: The HTTP API server
-weight: 11
+weight: 12
 ---
 
 `kura serve` runs the remote HTTP API — **Kura's only public surface**. It
@@ -68,15 +68,26 @@ exist at all — exactly right for a server that has no schema yet.
 
 - **The POST route is the write half**, covered in full by
   [Record ingestion](ingestion): it authorizes the `create`, validates the
-  body against the manifest, scans for PII, encrypts high-sensitivity and
-  free-text fields, and persists — the symmetric counterpart to the masked
-  read. `kura ingest` is the bulk-import CLI over it.
+  body against the manifest, scans for PII, encrypts content fields by
+  default (everything but the structural types), and persists — the
+  symmetric counterpart to the masked read. `kura ingest` is the bulk-import
+  CLI over it.
 
 - **Every response is masked** by the gate, per the requesting
   principal's policy. The server never sees unmasked data: the binding
   describes the read, the gate performs it and redacts the result. A get
   for a record that does not exist is a `404`; a denied request is a
   `403`.
+- **A read carries its erased fields.** A record with a crypto-shredded
+  field reads back normally — never an error. The get response is
+  `{"fields": {…}, "erased": [names…]}`, and each record in a list page
+  carries the same `erased` list; a shredded field is **absent from
+  `fields` and named in `erased`**, so a client can tell a field that was
+  erased (its key destroyed by design) apart from one that was never set,
+  and never sees the ciphertext. `erased` is elided when empty, so an
+  ordinary record reads as just its fields. This is distinct from a
+  genuine decrypt failure — tampered ciphertext or a wrong KEK — which
+  stays a hard `500`, never a silent erased read.
 - **List endpoints are bounded by default.** `GET /api/{entity}` accepts
   optional `limit` and `offset` query parameters. The gate clamps the
   page — a missing limit becomes the **default page size of 50**, and a
@@ -114,6 +125,7 @@ the same — authorized and audited by construction.
 | `GET /api/reviews/{id}` | `AdminReview` | admin or auditor |
 | `POST /api/reviews/{id}/decisions` | `AdminManage` | admin |
 | `POST /api/reviews/{id}/complete` | `AdminManage` | admin |
+| `POST /api/erase` | `AdminErase` | admin |
 | `GET /api/whoami` | (auth only) | any authenticated principal |
 
 - **Mutations are the admin role's alone**; the reads — the authorized
@@ -123,6 +135,14 @@ the same — authorized and audited by construction.
   carries a set of role names, and the store applies the whole set or
   none of it. Adding a user to the list and granting them roles are
   *distinct* operations — a role op on a user not on the list is a `404`.
+- **`/api/erase` crypto-shreds records.** It takes a JSON body of
+  `record_ids` and runs through **`Gate.Erase`** — authorized against the
+  `AdminErase` capability (admin only) and audited, one event per record.
+  Erasure destroys the per-value keys, never the rows, so it is compatible
+  with append-only entities and reaches the deny-delete immutable backup;
+  it names records by id and knows nothing of any domain entity. The `kura
+  erase` verb is its remote-first client, and requires `--confirm`. The
+  full mechanism is described in [storage](storage).
 - **`/api/policy` is read-only.** The effective policy is rendered from
   the [Cedar IR](policy); there is no write method on the route, because
   policy authoring stays a repo/PR activity, not a server endpoint.
@@ -237,12 +257,16 @@ deployment:
 | --- | --- |
 | `KURA_DATABASE_URL` | When set (TLS required), records and the authorized-user list are read/written through the Postgres-backed `PostgresStore`/`PostgresUserStore`, and pending [migrations](database) run against the database at startup. When unset, both stay in the in-memory `MemStore`/`MemUserStore` — existing behavior. |
 | `KURA_DB_TENANT_ID` | The tenant id the Postgres stores scope their row-level security to. Required when `KURA_DATABASE_URL` is set. |
-| `KURA_RECORD_ENCRYPTION_KEY` | The app-managed key the record store decrypts encrypted fields with. Required when `KURA_DATABASE_URL` is set. |
+| `FIELD_ENCRYPTION_KEY` | The **active** master KEK the record store wraps per-value DEKs under (base64-encoded 32-byte AES-256 key). Sourced through the [secrets manager](secrets) under its canonical secret name — from Doppler in production, from this process environment on the dev/bare path — never read into the data path directly. Required when `KURA_DATABASE_URL` is set. |
+| `KURA_KEK_VERSION` | The generation number the active `FIELD_ENCRYPTION_KEY` belongs to, stamped onto every wrapped DEK written. Defaults to `1`; you raise it by one for each KEK rotation. Non-sensitive config, read from the environment (not the secrets manager). |
+| `FIELD_ENCRYPTION_KEY_RETIRING` / `KURA_KEK_RETIRING_VERSION` | The **outgoing** KEK and its generation number, set only *during* a rotation. Loaded alongside the active key so the server can still open rows not yet re-wrapped; the retiring version must be below `KURA_KEK_VERSION`. Both are set together, and both are removed once the rotation drains. Unset outside a rotation. |
+| `KURA_DOPPLER_TOKEN` / `KURA_DOPPLER_PROJECT` / `KURA_DOPPLER_CONFIG` | When a Doppler service token is set, every secret (`FIELD_ENCRYPTION_KEY` included) is read from [Doppler](secrets) over its HTTPS API rather than the process environment; the project and config address the store and are then required. The token is injected at runtime by the deployment, never baked in. Unset, secrets resolve from the process environment — the dev/bare path. |
+| `KURA_ADMIN_DATABASE_URL` | The elevated migrator/owner DSN (TLS required; the `kura_admin` role). Schema migrations and append-only reconciliation run on this connection at startup — never the runtime `kura_api` connection — so the runtime role cannot own schema objects or write the append-only set. Required when `KURA_DATABASE_URL` is set. See [Database](database#two-connections-two-credentials). |
 | `KURA_DO_SPACES_ENDPOINT` | DO Spaces (S3-compatible) host without scheme, e.g. `nyc3.digitaloceanspaces.com`. Setting it turns on the `backup`/`restore` [job kinds](../machine-interface/cli-backup-restore); unset, they stay unregistered and `POST /api/jobs` for them answers a clear 400. The five variables below become required once it is set. |
 | `KURA_DO_SPACES_REGION` | Spaces region slug, e.g. `nyc3`. Required once Spaces is configured. |
 | `KURA_DO_SPACES_ACCESS_KEY` / `KURA_DO_SPACES_SECRET_KEY` | Credentials for the backups bucket's credential domain. The runtime opens the bucket [append-only](storage). Required once Spaces is configured. |
 | `KURA_DO_SPACES_BACKUPS_BUCKET` | The concrete name the IaC provisioned for the backups bucket this deployment writes to. Required once Spaces is configured. |
-| `KURA_BACKUP_ENCRYPTION_KEY` | High-entropy secret the backup dump is encrypted under (AES-256-GCM), **distinct from** `KURA_RECORD_ENCRYPTION_KEY` by design. Required once Spaces is configured; backups also require `KURA_DATABASE_URL` (there must be a database to dump). |
+| `KURA_BACKUP_ENCRYPTION_KEY` | High-entropy secret the backup dump is encrypted under (AES-256-GCM), **distinct from** `FIELD_ENCRYPTION_KEY` by design. Required once Spaces is configured; backups also require `KURA_DATABASE_URL` (there must be a database to dump). |
 | `KURA_MANIFEST_PATH` | Path to the [schema manifest](schema-manifest) file. When set, the gate enforces against it and the API grows a data route per entity; an invalid manifest fails startup loudly. When unset, the gate runs on an empty manifest and generates no data routes. |
 | `KURA_DIRECTORY` | Set to `none` to disable IdP-mismatch detection: the [Directory client](identity) becomes a no-op that reports every account active and never dials out, so `GET /api/users/mismatches` and the overview's needs-attention panel return no mismatches. For a deployment without directory-API access, and for the offline [local dev instance](../getting-started/local-development). When unset, the directory is the one paired with `KURA_IDP`. |
 

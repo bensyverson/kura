@@ -24,6 +24,19 @@ func buildRegistry(root *cobra.Command) *ops.Registry {
 			return emitAgentContext(root, out)
 		},
 	})
+	// erase is declaration-only: it projects onto agent-context and MCP,
+	// but its CLI command is the hand-written newEraseCmd (remote-first,
+	// --confirm-gated). A nil Handler marks the entry so buildRootCmd's
+	// projection loop does not auto-generate a second `erase` command. The
+	// name and summary come from the constants newEraseCmd shares, so the
+	// declaration and the command cannot drift.
+	r.Register(ops.Operation{
+		Name:    eraseVerb,
+		Summary: eraseSummary,
+		Args: []ops.Arg{
+			{Name: "record_ids", Summary: "ids of the records whose field-value keys are shredded", Type: "strings", Required: true},
+		},
+	})
 	return r
 }
 

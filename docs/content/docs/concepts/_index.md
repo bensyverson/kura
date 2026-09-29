@@ -12,6 +12,7 @@ The mental model behind Kura: the core enforcement library and the thin adapters
   {{< card link="ingestion" title="Record ingestion" subtitle="The unified, manifest-driven write path — validate, scan, encrypt, audit — and its CLI/HTTP surfaces." >}}
   {{< card link="audit" title="Audit log" subtitle="The append-only record of who did what — and why the data never lands in it." >}}
   {{< card link="database" title="Database layer" subtitle="The Postgres schema, migrations, extensions, per-component roles, RLS, and encryption at rest." >}}
+  {{< card link="encryption" title="Field encryption & crypto-shredding" subtitle="Encrypt-by-default, the separate erasable key store, and erasure as destroying a key — never a row." >}}
   {{< card link="secrets" title="Secrets" subtitle="The runtime-injection model and the Doppler secrets-backend decision." >}}
   {{< card link="policy" title="Cedar policy" subtitle="The v1 deploy-time policy-apply posture." >}}
   {{< card link="iac" title="Infrastructure as code" subtitle="The Terraform-for-IaC decision for the Standard-Regulated baseline." >}}

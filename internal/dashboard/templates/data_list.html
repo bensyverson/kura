@@ -24,7 +24,7 @@
         {{range .Records}}
         <tr>
           <td class="mono"><a href="{{.Href}}">{{.ID}}</a></td>
-          {{range .Cells}}<td class="mono">{{.}}</td>{{end}}
+          {{range .Cells}}<td class="mono">{{if .Erased}}<span class="erased-value">[erased]</span>{{else}}{{.Value}}{{end}}</td>{{end}}
         </tr>
         {{end}}
       </tbody>

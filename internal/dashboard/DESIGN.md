@@ -251,6 +251,15 @@ and round corners in one view. Borders are always hairline (1px).
   `label-field` headers, mono + tabular values, zebra via surface-2 only
   if density demands it. Mask PII server-side; never render an unmasked
   value the API masked.
+- **Erased fields (`badge-erased`, `.erased-value`):** a field whose
+  encryption key was crypto-shredded renders with a **quiet neutral badge**
+  (surface-2 / muted, like `badge-soon`) and the italic muted `[erased]`
+  sentinel in place of a value — never the vermilion attention pigment,
+  because erasure is a settled, permanent fact, not an action to take. This
+  keeps three read states visually distinct: a **masked** value (the
+  server's `[redacted]` text), an **erased** value (`[erased]` + badge), and
+  a field that was **never set** (a muted em-dash). The `[erased]` sentinel
+  matches the CLI so the two surfaces read the same.
 
 ### Progressive enhancement (non-negotiable)
 

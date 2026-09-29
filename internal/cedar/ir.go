@@ -53,6 +53,13 @@ func (a Action) isRead() bool {
 	return a == ActionRead || a == ActionList
 }
 
+// IsMutation reports whether a mutates an existing record (as opposed to
+// creating or reading one). Append-only entities forbid these: create is
+// their only write action.
+func (a Action) IsMutation() bool {
+	return a == ActionUpdate || a == ActionDelete
+}
+
 // Role is a named bundle of permissions. Principals are assigned roles;
 // grants attach permissions to roles. The JSON tags are deliberate: the
 // IR is the model an adapter renders read-only (the HTTP API's policy
@@ -126,11 +133,15 @@ func (p *Policy) ValidateAgainst(m *manifest.Manifest) error {
 		if !roles[g.Role] {
 			return fmt.Errorf("cedar: grant #%d references unknown role %q", i+1, g.Role)
 		}
-		if _, ok := m.Entity(g.Entity); !ok {
+		ent, ok := m.Entity(g.Entity)
+		if !ok {
 			return fmt.Errorf("cedar: grant #%d references entity %q absent from the manifest", i+1, g.Entity)
 		}
 		if !g.Action.Valid() {
 			return fmt.Errorf("cedar: grant #%d has invalid action %q", i+1, g.Action)
+		}
+		if ent.AppendOnly && g.Action.IsMutation() {
+			return fmt.Errorf("cedar: grant #%d: append-only entity %q cannot grant action %q", i+1, g.Entity, g.Action)
 		}
 		if len(g.VisiblePII) > 0 && !g.Action.isRead() {
 			return fmt.Errorf("cedar: grant #%d sets VisiblePII on non-read action %q", i+1, g.Action)
@@ -172,6 +183,11 @@ func DefaultPolicy(m *manifest.Manifest) *Policy {
 
 	for _, e := range m.Entities {
 		for _, a := range AllActions() {
+			// Append-only entities are insert-only: never emit
+			// update/delete grants for them.
+			if e.AppendOnly && a.IsMutation() {
+				continue
+			}
 			admin := Grant{Role: "admin", Entity: e.Name, Action: a}
 			user := Grant{Role: "user", Entity: e.Name, Action: a}
 			if a.isRead() {

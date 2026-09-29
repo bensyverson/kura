@@ -1,6 +1,6 @@
 ---
 title: Object storage
-weight: 8
+weight: 9
 ---
 
 Two things Kura keeps live **outside Postgres**: encrypted backup dumps and the

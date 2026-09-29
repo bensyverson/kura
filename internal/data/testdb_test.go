@@ -9,7 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/bensyverson/kura/internal/crypto"
 	"github.com/bensyverson/kura/internal/db"
+	"github.com/bensyverson/kura/internal/keystore"
 )
 
 // testEnv is one integration test's isolated slice of the test cluster:
@@ -137,12 +139,86 @@ func newTenantID(t *testing.T, env testEnv) string {
 	return id
 }
 
-// seedRecord inserts one record and its field values under tenantID,
-// via the superuser pool (which bypasses RLS). plain fields land in
-// value_text; encrypted fields are pgp_sym_encrypt'd under key into
-// value_encrypted, exactly as the ingestion path will store them. It
-// returns the new record's id.
-func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encrypted map[string]string, key string) string {
+// cryptoEnv bundles the app-layer envelope collaborators a record store
+// needs: an in-memory key store (the Fake), the master-KEK wrap capability,
+// and the read-side unwrapping cache over that store. One cryptoEnv per
+// test gives seedRecord and the store under test a shared key store, so a
+// value sealed by the seeder reads back through the store's cache.
+type cryptoEnv struct {
+	Keys    *keystore.Fake
+	Wrapper crypto.Wrapper
+	Ring    *crypto.KeyRing
+	Cache   *keystore.Cache
+}
+
+// newCryptoEnv builds a cryptoEnv over a fixed 32-byte test KEK. The Fake
+// key store and the cache stay in memory — the key store is a separate
+// concern from the record database, so integration tests exercise the real
+// main-DB read/write paths against a fake key store without provisioning a
+// second cluster (the Postgres key store has its own integration tests).
+func newCryptoEnv(t *testing.T) *cryptoEnv {
+	return newCryptoEnvAtVersion(t, 1)
+}
+
+// newCryptoEnvAtVersion builds a cryptoEnv whose single test KEK is the active
+// generation `active`. It lets a test prove the write path stamps the active
+// version (not a hardcoded default) by choosing a non-default active.
+func newCryptoEnvAtVersion(t *testing.T, active int) *cryptoEnv {
+	t.Helper()
+	w, err := crypto.NewKeyWrapper([]byte("0123456789abcdef0123456789abcdef"))
+	if err != nil {
+		t.Fatalf("NewKeyWrapper: %v", err)
+	}
+	ring, err := crypto.NewKeyRing(active, map[int]crypto.Wrapper{active: w})
+	if err != nil {
+		t.Fatalf("NewKeyRing: %v", err)
+	}
+	keys := keystore.NewFake()
+	return &cryptoEnv{Keys: keys, Wrapper: w, Ring: ring, Cache: keystore.NewCache(keys, ring, 128)}
+}
+
+// seal encrypts value under a fresh per-value DEK and stores the wrapped
+// DEK, mirroring the write path's sealField. It returns the ciphertext the
+// seeder writes into value_encrypted.
+func (ce *cryptoEnv) seal(t *testing.T, tenantID, recordID, field, value string) []byte {
+	t.Helper()
+	dek, err := crypto.GenerateDEK()
+	if err != nil {
+		t.Fatalf("GenerateDEK: %v", err)
+	}
+	ciphertext, err := crypto.Encrypt(dek, []byte(value))
+	if err != nil {
+		t.Fatalf("Encrypt: %v", err)
+	}
+	wrapped, err := ce.Wrapper.Wrap(dek)
+	if err != nil {
+		t.Fatalf("Wrap: %v", err)
+	}
+	if err := ce.Keys.Store(context.Background(), keystore.Key{
+		TenantID: tenantID, RecordID: recordID, FieldName: field,
+	}, wrapped, ce.Ring.ActiveVersion()); err != nil {
+		t.Fatalf("keystore Store: %v", err)
+	}
+	return ciphertext
+}
+
+// newRecordStore builds a PostgresStore over pool, scoped to tenant, with
+// ce's crypto collaborators. It fails the test on a construction error.
+func newRecordStore(t *testing.T, pool *sql.DB, tenant string, ce *cryptoEnv) *PostgresStore {
+	t.Helper()
+	s, err := NewPostgresStore(pool, tenant, ce.Keys, ce.Ring, ce.Cache)
+	if err != nil {
+		t.Fatalf("NewPostgresStore: %v", err)
+	}
+	return s
+}
+
+// seedRecord inserts one record and its field values under tenantID, via
+// the superuser pool (which bypasses RLS). plain fields land in value_text;
+// encrypted fields are sealed app-layer under a per-value DEK (see
+// cryptoEnv.seal) into value_encrypted, exactly as the ingestion path
+// stores them. It returns the new record's id.
+func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encrypted map[string]string, ce *cryptoEnv) string {
 	t.Helper()
 	var id string
 	err := env.DB.QueryRow(
@@ -160,14 +236,61 @@ func seedRecord(t *testing.T, env testEnv, tenantID, entity string, plain, encry
 		}
 	}
 	for name, val := range encrypted {
+		ciphertext := ce.seal(t, tenantID, id, name, val)
 		if _, err := env.DB.Exec(
 			`INSERT INTO kura.record_field_values (record_id, tenant_id, field_name, field_type, value_encrypted)
-			 VALUES ($1, $2, $3, 'text', pgp_sym_encrypt($4, $5))`,
-			id, tenantID, name, val, key); err != nil {
+			 VALUES ($1, $2, $3, 'text', $4)`,
+			id, tenantID, name, ciphertext); err != nil {
 			t.Fatalf("inserting encrypted field %q: %v", name, err)
 		}
 	}
 	return id
+}
+
+// freezeEntity marks an entity append-only for tenantID by writing the set
+// directly via the superuser pool (kura_api has no access; the harness
+// stands in for the migrator/owner that writes it in production). Any later
+// UPDATE/DELETE on that entity's records is then rejected by the trigger.
+func freezeEntity(t *testing.T, env testEnv, tenantID, entity string) {
+	t.Helper()
+	if _, err := env.DB.Exec(
+		`INSERT INTO kura.append_only_entities (tenant_id, entity) VALUES ($1, $2)`,
+		tenantID, entity); err != nil {
+		t.Fatalf("freezing entity %q: %v", entity, err)
+	}
+}
+
+// recordRowFingerprint returns a stable string capturing the immutable
+// columns of a record row, so a test can assert erasure left the row
+// byte-for-byte untouched.
+func recordRowFingerprint(t *testing.T, env testEnv, id string) string {
+	t.Helper()
+	var entity string
+	var seq int64
+	var createdAt time.Time
+	if err := env.DB.QueryRow(
+		`SELECT entity, seq, created_at FROM kura.records WHERE id = $1`, id).
+		Scan(&entity, &seq, &createdAt); err != nil {
+		t.Fatalf("fingerprinting record %s: %v", id, err)
+	}
+	return fmt.Sprintf("%s|%d|%s", entity, seq, createdAt.UTC().Format(time.RFC3339Nano))
+}
+
+// attemptRecordUpdate tries to UPDATE a record row within tenantID's scope,
+// returning the error the append-only trigger raises (or nil if none). It
+// sets the tenant GUC transaction-locally so the trigger's tenant-scoped
+// lookup binds, then rolls back — it never actually mutates.
+func attemptRecordUpdate(env testEnv, tenantID, id string) error {
+	tx, err := env.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`SELECT set_config('kura.tenant_id', $1, true)`, tenantID); err != nil {
+		return err
+	}
+	_, err = tx.Exec(`UPDATE kura.records SET updated_at = now() WHERE id = $1`, id)
+	return err
 }
 
 // rawEncryptedValue returns the raw bytea stored for a field, so a test

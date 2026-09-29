@@ -89,6 +89,9 @@ echo "==> Starting Postgres (scripts/test-db.sh)"
 db_export="$("$here/test-db.sh")"
 eval "$db_export" # exports KURA_TEST_DATABASE_URL
 export KURA_DATABASE_URL="$KURA_TEST_DATABASE_URL"
+# Production splits the runtime (kura_api) and migrator/owner (kura_admin)
+# credentials; the local dev DB has one superuser, so both DSNs are the same.
+export KURA_ADMIN_DATABASE_URL="$KURA_TEST_DATABASE_URL"
 export KURA_DB_TENANT_ID="$TENANT_ID"
 export KURA_RECORD_ENCRYPTION_KEY="$ENC_KEY"
 

@@ -36,6 +36,16 @@ Every gate path funnels through the `Recorder` — `RecordAuthentication`,
 `RecordAuthorization`, `RecordAccess` — so emitting an audit event is not something a
 caller can forget.
 
+**Erasure is audited like any other privileged action.** A crypto-shred
+([`POST /api/erase`](server)) runs through `Gate.Erase`, which records the
+`authorization` decision and then one `access` event **per record erased** —
+naming the acting principal, its tenant, and each record id. A *completed*
+erase leaves those access events; a *failed* one (the shred did not happen —
+it is atomic, so there is no partial state) leaves the `authorization`
+event but no access event, so the trail tells the two apart. As with every
+event, the record is metadata only: it carries the record ids, never the
+destroyed key material or the now-unreadable field values.
+
 ### The client IP rides the context
 
 The real client IP is request-scoped, not something every `Record*` call should have

@@ -21,8 +21,15 @@ type Manifest struct {
 
 // Entity is one kind of record the client stores.
 type Entity struct {
-	Name          string         `json:"name"`
-	Description   string         `json:"description,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+
+	// AppendOnly, when true, makes records of this entity insert-only:
+	// they may be created but never updated or deleted. Append-only
+	// entities may still declare relationships and may be the target of
+	// other entities' relationships (their records get referenced).
+	AppendOnly bool `json:"append_only,omitempty"`
+
 	Fields        []Field        `json:"fields"`
 	Relationships []Relationship `json:"relationships,omitempty"`
 }
